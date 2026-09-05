@@ -38,6 +38,12 @@ function conn(): DatabaseSync {
       ts      INTEGER NOT NULL
     );
     CREATE INDEX IF NOT EXISTS idx_msg_chat ON messages(chat_id, ts);
+    -- Los nombres de las PERSONAS no vienen en el chat: llegan aparte, en el
+    -- arreglo contacts. Sin esta tabla la lista muestra numeros crudos.
+    CREATE TABLE IF NOT EXISTS contacts (
+      id   TEXT PRIMARY KEY,
+      name TEXT NOT NULL
+    );
   `)
   return db
 }
@@ -46,6 +52,31 @@ export interface ChatGuardado {
   id: string
   name: string
   updatedAt: number
+}
+
+export interface ContactoGuardado {
+  id: string
+  name: string
+}
+
+/** Nombre para mostrar de una persona. Nunca pisa un nombre con uno vacio. */
+export function guardarContactos(cs: ContactoGuardado[]): void {
+  const utiles = cs.filter(c => c.id && c.name)
+  if (utiles.length === 0) return
+  const c = conn()
+  const stmt = c.prepare(`
+    INSERT INTO contacts (id, name) VALUES (?, ?)
+    ON CONFLICT(id) DO UPDATE SET
+      name = CASE WHEN excluded.name != '' THEN excluded.name ELSE contacts.name END
+  `)
+  c.exec('BEGIN')
+  try {
+    for (const x of utiles) stmt.run(x.id, x.name)
+    c.exec('COMMIT')
+  } catch (err) {
+    c.exec('ROLLBACK')
+    throw err
+  }
 }
 
 export interface MsgGuardado {
@@ -97,12 +128,52 @@ export function guardarMensajes(msgs: MsgGuardado[]): void {
   }
 }
 
-/** Chats mas recientes primero, igual que el menu de Telegram. */
+/**
+ * Convierte un JID en algo legible cuando no hay nombre.
+ * WhatsApp NO le entrega la agenda telefonica a los dispositivos vinculados:
+ * solo llegan los nombres de grupos y de quien te escribe (via pushName). Para
+ * el resto, un numero bien formateado se reconoce; un JID crudo no.
+ *
+ *   5216643637705@s.whatsapp.net  ->  +52 664 363 7705
+ */
+export function numeroLegible(jid: string): string {
+  // SOLO personas. El id de un grupo es un numero largo que no es telefono de
+  // nadie: formatearlo inventaria un contacto que no existe.
+  if (!jid.endsWith('@s.whatsapp.net')) return 'Grupo'
+  const crudo = jid.split('@')[0]?.split(':')[0] ?? jid
+  if (!/^[0-9]+$/.test(crudo)) return jid
+  // Mexico: el 1 despues del 52 es herencia del prefijo viejo de celular y no
+  // se marca desde 2019. Estorba al leer, asi que fuera.
+  const n = crudo.startsWith('521') && crudo.length === 13 ? `52${crudo.slice(3)}` : crudo
+  if (n.startsWith('52') && n.length === 12) {
+    const d = n.slice(2)
+    return `+52 ${d.slice(0, 3)} ${d.slice(3, 6)} ${d.slice(6)}`
+  }
+  if (n.length > 10) return `+${n.slice(0, n.length - 10)} ${n.slice(-10, -7)} ${n.slice(-7, -4)} ${n.slice(-4)}`
+  return `+${n}`
+}
+
+/**
+ * Chats mas recientes primero, igual que el menu de Telegram.
+ * El nombre se resuelve en cascada: el del chat (grupos), si no el del
+ * contacto (personas), y como ultimo recurso el numero pelado.
+ */
 export function listarChats(limit = 20): Contact[] {
   const filas = conn()
-    .prepare('SELECT id, name FROM chats ORDER BY updated_at DESC LIMIT ?')
+    .prepare(`
+      SELECT ch.id AS id,
+             COALESCE(NULLIF(ch.name, ''), NULLIF(co.name, ''), ch.id) AS name
+      FROM chats ch
+      LEFT JOIN contacts co ON co.id = ch.id
+      ORDER BY ch.updated_at DESC
+      LIMIT ?
+    `)
     .all(limit) as { id: string; name: string }[]
-  return filas.map(f => ({ id: f.id, name: f.name || f.id }))
+  return filas.map(f => ({
+    id: f.id,
+    // Si la cascada del SQL terminó cayendo en el id, lo volvemos legible.
+    name: f.name === f.id ? numeroLegible(f.id) : f.name,
+  }))
 }
 
 /**

@@ -23,33 +23,35 @@ if (!numero || numero.length < 10) {
   process.exit(1)
 }
 
-async function main(): Promise<void> {
-  // Dinamico por lo mismo que en el adaptador: Baileys es solo-ESM.
-  const { default: makeWASocket, useMultiFileAuthState } = await import('baileys')
+const MAX_INTENTOS = 8
+let intentos = 0
+let codigoPedido = false
+
+async function conectar(): Promise<void> {
+  const { default: makeWASocket, useMultiFileAuthState, DisconnectReason } =
+    await import('baileys')
 
   mkdirSync(AUTH_DIR, { recursive: true, mode: 0o700 })
   const { state, saveCreds } = await useMultiFileAuthState(AUTH_DIR)
-
-  if (state.creds.registered) {
-    console.log('Este servidor YA esta vinculado a WhatsApp. No hace falta hacer nada.')
-    console.log(`Para empezar de cero, borra la carpeta ${AUTH_DIR} y vuelve a correr esto.`)
-    process.exit(0)
-  }
 
   const sock = makeWASocket({
     auth: state,
     logger: loggerMudo,
     syncFullHistory: true,
     markOnlineOnConnect: false,
+    // Baileys da 60 s al primer intento y 20 s a los siguientes, y al agotarlos
+    // corta con 408. Son ~2 minutos: no alcanza para leer el codigo, ir al
+    // telefono y teclearlo. Con esto cada intento dura 3 minutos.
+    qrTimeout: 180_000,
   })
 
   sock.ev.on('creds.update', saveCreds)
 
-  let pedido = false
-  sock.ev.on('connection.update', async ({ connection, lastDisconnect }) => {
-    // El codigo se pide una vez que el socket arranco, no antes.
-    if (!pedido && (connection === 'connecting' || connection === undefined)) {
-      pedido = true
+  sock.ev.on('connection.update', async ({ connection, lastDisconnect, qr }) => {
+    // El evento qr solo aparece cuando el servidor EXIGE emparejar. Si las
+    // credenciales guardadas ya alcanzan, nunca llega y vamos directo a 'open'.
+    if (qr && !codigoPedido && !state.creds.registered) {
+      codigoPedido = true
       try {
         const codigo = await sock.requestPairingCode(numero)
         console.log('\n===========================================')
@@ -59,26 +61,45 @@ async function main(): Promise<void> {
         console.log('  WhatsApp -> Ajustes -> Dispositivos vinculados')
         console.log('  -> Vincular dispositivo -> Vincular con numero de telefono')
         console.log('  -> escribe el codigo de arriba\n')
-        console.log('El codigo caduca en pocos minutos. Si expira, vuelve a correr esto.')
+        console.log('Esperando... (la ventana es de varios minutos)')
       } catch (err) {
         console.error('No se pudo pedir el codigo:', err)
-        process.exit(1)
       }
     }
 
     if (connection === 'open') {
-      console.log('\nVINCULADO. Las credenciales quedaron en', AUTH_DIR)
-      console.log('No copies esa carpeta fuera del servidor.')
-      setTimeout(() => process.exit(0), 2000)
+      if (state.creds.registered) {
+        console.log('\nVINCULADO Y REGISTRADO. Credenciales en', AUTH_DIR)
+        console.log('No copies esa carpeta fuera del servidor.')
+        setTimeout(() => process.exit(0), 3000)
+      } else {
+        console.log('[conectado, esperando que se confirme el registro...]')
+      }
     }
 
     if (connection === 'close') {
       const codigo = (lastDisconnect?.error as { output?: { statusCode?: number } })
         ?.output?.statusCode
-      console.error(`Conexion cerrada (codigo ${codigo ?? '?'}). Si no llegaste a escribir el codigo, vuelve a correr esto.`)
-      process.exit(1)
+
+      if (codigo === DisconnectReason.loggedOut) {
+        console.error('Sesion cerrada desde el telefono. Borra la carpeta y empieza de cero.')
+        process.exit(1)
+      }
+
+      // ESTO ES LO QUE FALTABA. Tras emparejar, WhatsApp CIERRA la conexion a
+      // proposito y espera que el cliente vuelva a conectarse; el registro se
+      // completa recien en esa reconexion. Salirse aca deja la sesion a medias,
+      // con identidad asignada pero registered = false.
+      if (intentos < MAX_INTENTOS) {
+        intentos++
+        console.log(`[conexion cerrada (${codigo ?? '?'}); reconectando ${intentos}/${MAX_INTENTOS}...]`)
+        setTimeout(() => { void conectar() }, 2000)
+      } else {
+        console.error('Demasiadas reconexiones. Vuelve a intentar desde cero.')
+        process.exit(1)
+      }
     }
   })
 }
 
-main().catch(err => { console.error(err); process.exit(1) })
+conectar().catch(err => { console.error(err); process.exit(1) })

@@ -2,8 +2,10 @@ import { mkdirSync } from 'node:fs'
 // SOLO TIPOS: se borran al compilar, no cargan nada en tiempo de ejecucion.
 import type { WASocket, WAMessage, Chat } from 'baileys'
 import type { Contact, Msg, MessagingProvider } from './port'
-import type { ChatGuardado, MsgGuardado } from './store'
-import { guardarChats, guardarMensajes, listarChats, historial } from './store'
+import type { ChatGuardado, MsgGuardado, ContactoGuardado } from './store'
+import {
+  guardarChats, guardarMensajes, guardarContactos, listarChats, historial,
+} from './store'
 
 /**
  * Baileys exige un logger con esta forma. No importamos su tipo ILogger porque
@@ -84,6 +86,18 @@ function volcarChats(chats: Chat[]): void {
   guardarChats(filas)
 }
 
+/** El nombre de una persona puede venir en name, notify o verifiedName. */
+function volcarContactos(cs: { id?: string | null; name?: string | null; notify?: string | null; verifiedName?: string | null }[]): void {
+  const filas: ContactoGuardado[] = []
+  for (const c of cs) {
+    if (!c.id) continue
+    const nombre = c.name || c.notify || c.verifiedName || ''
+    if (!nombre) continue
+    filas.push({ id: c.id, name: nombre })
+  }
+  guardarContactos(filas)
+}
+
 function volcarMensajes(msgs: WAMessage[]): void {
   const filas: MsgGuardado[] = []
   for (const m of msgs) {
@@ -95,12 +109,20 @@ function volcarMensajes(msgs: WAMessage[]): void {
     filas.push({ id, chatId: jid, out: Boolean(m.key?.fromMe), text: t, ts })
     // Un mensaje nuevo tambien mueve el chat hacia arriba en la lista.
     guardarChats([{ id: jid, name: '', updatedAt: ts }])
+    // En un chat 1 a 1, pushName es el nombre de quien escribe: sirve para
+    // ponerle cara al numero cuando no lo tenemos en la agenda. En grupos NO,
+    // porque ahi pushName es el del participante, no el del grupo.
+    if (!jid.endsWith('@g.us') && !m.key?.fromMe && m.pushName) {
+      guardarContactos([{ id: jid, name: m.pushName }])
+    }
   }
   guardarMensajes(filas)
 }
 
 let sock: WASocket | null = null
 let conectando: Promise<WASocket> | null = null
+let reintentos = 0
+const MAX_REINTENTOS = 10
 
 async function abrir(): Promise<WASocket> {
   // Baileys 7 arrastra whatsapp-rust-bridge, que es SOLO-ESM (su package.json
@@ -131,10 +153,13 @@ async function abrir(): Promise<WASocket> {
   })
 
   s.ev.on('creds.update', saveCreds)
-  s.ev.on('messaging-history.set', ({ chats, messages }) => {
+  s.ev.on('messaging-history.set', ({ chats, contacts, messages }) => {
     volcarChats(chats)
+    volcarContactos(contacts)
     volcarMensajes(messages)
   })
+  s.ev.on('contacts.upsert', volcarContactos)
+  s.ev.on('contacts.update', volcarContactos)
   s.ev.on('chats.upsert', volcarChats)
   s.ev.on('chats.update', updates => {
     volcarChats(updates.filter(u => u.id) as Chat[])
@@ -142,18 +167,38 @@ async function abrir(): Promise<WASocket> {
   s.ev.on('messages.upsert', ({ messages }) => volcarMensajes(messages))
 
   s.ev.on('connection.update', ({ connection, lastDisconnect }) => {
-    if (connection === 'close') {
-      const codigo = (lastDisconnect?.error as { output?: { statusCode?: number } })
-        ?.output?.statusCode
-      sock = null
-      conectando = null
-      if (codigo === DisconnectReason.loggedOut) {
-        console.error('[whatsapp] sesion cerrada desde el telefono: hay que vincular de nuevo')
-        return
-      }
-      console.warn(`[whatsapp] conexion caida (codigo ${codigo ?? '?'}); reconecta al proximo pedido`)
+    if (connection === 'open') {
+      reintentos = 0
+      console.log('[whatsapp] conectado')
+      return
     }
-    if (connection === 'open') console.log('[whatsapp] conectado')
+
+    if (connection !== 'close') return
+
+    const codigo = (lastDisconnect?.error as { output?: { statusCode?: number } })
+      ?.output?.statusCode
+    sock = null
+    conectando = null
+
+    if (codigo === DisconnectReason.loggedOut) {
+      console.error('[whatsapp] sesion cerrada desde el telefono: hay que vincular de nuevo')
+      return
+    }
+
+    // RECONEXION ACTIVA, no perezosa. Si esperaramos al proximo pedido HTTP,
+    // una caida de madrugada nos dejaria sin recibir mensajes hasta que
+    // alguien abriera la app -- y en WhatsApp los mensajes que no se reciben
+    // mientras estas desconectado no se pueden pedir despues.
+    // El 515 (restartRequired) es NORMAL: WhatsApp cierra a proposito y espera
+    // que el cliente vuelva a conectarse.
+    if (reintentos >= MAX_REINTENTOS) {
+      console.error(`[whatsapp] ${MAX_REINTENTOS} reconexiones fallidas seguidas; me detengo`)
+      return
+    }
+    reintentos++
+    const espera = Math.min(3000 * reintentos, 30_000)
+    console.warn(`[whatsapp] caida (${codigo ?? '?'}); reconectando en ${espera / 1000}s (${reintentos}/${MAX_REINTENTOS})`)
+    setTimeout(() => { void getSocket().catch(() => {}) }, espera)
   })
 
   return s
@@ -168,6 +213,20 @@ async function getSocket(): Promise<WASocket> {
       .catch(err => { conectando = null; throw err })
   }
   return conectando
+}
+
+/**
+ * Pide a WhatsApp que reenvie el estado de la cuenta, que es donde viajan los
+ * NOMBRES de los contactos. Hace falta porque esos nombres llegan una sola vez,
+ * en la sincronizacion inicial: si el proceso que estaba escuchando en ese
+ * momento no los guardo, no vuelven solos.
+ */
+export async function resincronizarContactos(): Promise<void> {
+  const s = await getSocket()
+  await s.resyncAppState(
+    ['critical_block', 'critical_unblock_low', 'regular_high', 'regular_low', 'regular'],
+    true,
+  )
 }
 
 /**
