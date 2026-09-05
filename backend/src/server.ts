@@ -2,7 +2,7 @@ import 'dotenv/config'
 import express from 'express'
 import cors from 'cors'
 import rateLimit from 'express-rate-limit'
-import { listContacts, getHistory, sendMessage } from './telegram'
+import { proveedor } from './messaging'
 
 const app = express()
 
@@ -97,7 +97,7 @@ app.post('/api/soniox-key', limiteSoniox, auth, async (_req, res) => {
 
 app.get('/api/contacts', auth, async (_req, res) => {
   try {
-    res.json({ contacts: await listContacts() })
+    res.json({ contacts: await proveedor().listContacts() })
   } catch (err) {
     res.status(500).json({ error: String(err) })
   }
@@ -109,7 +109,7 @@ app.get('/api/messages', auth, async (req, res) => {
   const limit = Math.min(Number(req.query.limit ?? 10) || 10, 50)
   if (!peer) return res.status(400).json({ error: 'falta peer' })
   try {
-    res.json({ messages: await getHistory(peer, limit) })
+    res.json({ messages: await proveedor().getHistory(peer, limit) })
   } catch (err) {
     res.status(500).json({ error: String(err) })
   }
@@ -119,7 +119,7 @@ app.post('/api/send', auth, async (req, res) => {
   const { peer, text } = req.body ?? {}
   if (!peer || !text) return res.status(400).json({ error: 'faltan peer o text' })
   try {
-    await sendMessage(String(peer), String(text))
+    await proveedor().sendMessage(String(peer), String(text))
     res.json({ ok: true })
   } catch (err) {
     res.status(500).json({ error: String(err) })

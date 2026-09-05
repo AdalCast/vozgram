@@ -214,10 +214,28 @@ Esto es lo que costó descubrir. Si vas a construir para los G2, léelo.
 ## Estructura
 
 ```
-backend/     Node + Express + GramJS. Acuña claves de Soniox y habla con Telegram.
-glasses/     App web (Vite + TypeScript) que corre en el WebView y pinta el HUD.
-BACKLOG.md   Lo que molesta al usar la app, anotado antes de decidir qué sigue.
+backend/
+  src/server.ts          Endpoints HTTP. NO conoce a ningún mensajero por su nombre.
+  src/messaging/port.ts  El contrato: qué debe saber hacer un mensajero.
+  src/messaging/         Un archivo por mensajero, cada uno cumpliendo el contrato.
+glasses/                 App web (Vite + TypeScript) que corre en el WebView y pinta el HUD.
+BACKLOG.md               Lo que molesta al usar la app, anotado antes de decidir qué sigue.
 ```
+
+### Puertos y adaptadores
+
+Los endpoints hablan con `MessagingProvider`, nunca con Telegram directamente:
+
+```
+server.ts ──▶ port.ts (el contrato)
+                 ▲
+                 │
+          telegram.ts
+```
+
+Agregar otro mensajero es escribir un archivo que cumpla el contrato y
+registrarlo en `messaging/index.ts`. `server.ts` no se toca. La variable
+`MESSAGING_PROVIDER` elige cuál se usa (por defecto, `telegram`).
 
 ## Licencia
 
