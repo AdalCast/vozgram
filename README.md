@@ -261,18 +261,38 @@ BACKLOG.md               Lo que molesta al usar la app, anotado antes de decidir
 
 ### Puertos y adaptadores
 
-Los endpoints hablan con `MessagingProvider`, nunca con Telegram directamente:
+Los endpoints hablan con `MessagingProvider`, nunca con un mensajero concreto:
 
 ```
-server.ts ──▶ port.ts (el contrato)
-                 ▲
-                 │
-          telegram.ts
+server.ts ──▶ index.ts (enrutador) ──▶ port.ts (el contrato)
+                                          ▲          ▲
+                                          │          │
+                                   telegram.ts   whatsapp.ts
 ```
 
 Agregar otro mensajero es escribir un archivo que cumpla el contrato y
-registrarlo en `messaging/index.ts`. `server.ts` no se toca. La variable
-`MESSAGING_PROVIDER` elige cuál se usa (por defecto, `telegram`).
+registrarlo en `messaging/index.ts`. `server.ts` no se toca.
+
+### Los dos mensajeros a la vez
+
+`/api/contacts` devuelve los chats de **todos** los mensajeros activos en una
+sola lista ordenada por actividad real, con el origen marcado (`TG` / `WA`).
+La marca solo aparece si hay más de una fuente: con una sola sería ruido en
+una pantalla de 576 px.
+
+Cada id viaja prefijado (`whatsapp:5215512345678@s.whatsapp.net`) y el
+enrutador lo devuelve a su adaptador. **Los ids son opacos para los lentes**:
+solo los reciben y los devuelven, así que sumar un mensajero **no exige
+reconstruir el `.ehpk`**.
+
+Un id sin prefijo se enruta a Telegram. Eso no es cortesía: es lo que evita
+romper la app ya instalada en los lentes, que manda ids sin prefijar.
+
+Si un mensajero falla, la lista sigue mostrando los demás (`Promise.allSettled`).
+Un mensajero caído no puede dejar al usuario sin app.
+
+`MESSAGING_PROVIDERS` (lista separada por comas) permite acotar cuáles se usan.
+Por defecto se usan todos los registrados.
 
 ## Licencia
 

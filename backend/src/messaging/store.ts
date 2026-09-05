@@ -162,17 +162,19 @@ export function listarChats(limit = 20): Contact[] {
   const filas = conn()
     .prepare(`
       SELECT ch.id AS id,
-             COALESCE(NULLIF(ch.name, ''), NULLIF(co.name, ''), ch.id) AS name
+             COALESCE(NULLIF(ch.name, ''), NULLIF(co.name, ''), ch.id) AS name,
+             ch.updated_at AS updatedAt
       FROM chats ch
       LEFT JOIN contacts co ON co.id = ch.id
       ORDER BY ch.updated_at DESC
       LIMIT ?
     `)
-    .all(limit) as { id: string; name: string }[]
+    .all(limit) as { id: string; name: string; updatedAt: number }[]
   return filas.map(f => ({
     id: f.id,
     // Si la cascada del SQL terminó cayendo en el id, lo volvemos legible.
     name: f.name === f.id ? numeroLegible(f.id) : f.name,
+    updatedAt: f.updatedAt,
   }))
 }
 

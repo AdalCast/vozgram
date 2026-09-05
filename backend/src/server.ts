@@ -2,7 +2,7 @@ import 'dotenv/config'
 import express from 'express'
 import cors from 'cors'
 import rateLimit from 'express-rate-limit'
-import { proveedor } from './messaging'
+import { listarTodo, resolver } from './messaging'
 
 const app = express()
 
@@ -97,7 +97,7 @@ app.post('/api/soniox-key', limiteSoniox, auth, async (_req, res) => {
 
 app.get('/api/contacts', auth, async (_req, res) => {
   try {
-    res.json({ contacts: await proveedor().listContacts() })
+    res.json({ contacts: await listarTodo() })
   } catch (err) {
     res.status(500).json({ error: String(err) })
   }
@@ -105,21 +105,23 @@ app.get('/api/contacts', auth, async (_req, res) => {
 
 /** Ultimos mensajes de un chat, para mostrar la conversacion en los lentes. */
 app.get('/api/messages', auth, async (req, res) => {
-  const peer = String(req.query.peer ?? '')
+  const peerCrudo = String(req.query.peer ?? '')
   const limit = Math.min(Number(req.query.limit ?? 10) || 10, 50)
-  if (!peer) return res.status(400).json({ error: 'falta peer' })
+  if (!peerCrudo) return res.status(400).json({ error: 'falta peer' })
   try {
-    res.json({ messages: await proveedor().getHistory(peer, limit) })
+    const { proveedor, peer } = resolver(peerCrudo)
+    res.json({ messages: await proveedor.getHistory(peer, limit) })
   } catch (err) {
     res.status(500).json({ error: String(err) })
   }
 })
 
 app.post('/api/send', auth, async (req, res) => {
-  const { peer, text } = req.body ?? {}
-  if (!peer || !text) return res.status(400).json({ error: 'faltan peer o text' })
+  const { peer: peerCrudo, text } = req.body ?? {}
+  if (!peerCrudo || !text) return res.status(400).json({ error: 'faltan peer o text' })
   try {
-    await proveedor().sendMessage(String(peer), String(text))
+    const { proveedor, peer } = resolver(String(peerCrudo))
+    await proveedor.sendMessage(peer, String(text))
     res.json({ ok: true })
   } catch (err) {
     res.status(500).json({ error: String(err) })

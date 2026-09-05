@@ -13,6 +13,12 @@
 export interface Contact {
   id: string
   name: string
+  /**
+   * Ultima actividad, en segundos epoch. Existe para poder MEZCLAR chats de
+   * mensajeros distintos en un solo orden: sin esto, cada adaptador devuelve
+   * su lista bien ordenada pero no hay forma de intercalarlas con sentido.
+   */
+  updatedAt?: number
 }
 
 export interface Msg {

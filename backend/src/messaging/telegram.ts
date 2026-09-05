@@ -31,7 +31,7 @@ export const telegram: MessagingProvider = {
     const dialogs = await c.getDialogs({ limit })
     return dialogs
       .filter(d => d.isUser || d.isGroup)
-      .map(d => ({ id: String(d.id), name: d.title ?? 'sin nombre' }))
+      .map(d => ({ id: String(d.id), name: d.title ?? 'sin nombre', updatedAt: d.date }))
   },
 
   /**
