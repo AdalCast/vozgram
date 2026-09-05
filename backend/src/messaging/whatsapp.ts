@@ -1,0 +1,197 @@
+import { mkdirSync } from 'node:fs'
+// SOLO TIPOS: se borran al compilar, no cargan nada en tiempo de ejecucion.
+import type { WASocket, WAMessage, Chat } from 'baileys'
+import type { Contact, Msg, MessagingProvider } from './port'
+import type { ChatGuardado, MsgGuardado } from './store'
+import { guardarChats, guardarMensajes, listarChats, historial } from './store'
+
+/**
+ * Baileys exige un logger con esta forma. No importamos su tipo ILogger porque
+ * el paquete no lo expone en la raiz; TypeScript compara FORMAS, no nombres,
+ * asi que declararlo aca alcanza y nos evita depender de rutas internas suyas.
+ */
+interface LoggerBaileys {
+  level: string
+  child(obj: Record<string, unknown>): LoggerBaileys
+  trace(obj: unknown, msg?: string): void
+  debug(obj: unknown, msg?: string): void
+  info(obj: unknown, msg?: string): void
+  warn(obj: unknown, msg?: string): void
+  error(obj: unknown, msg?: string): void
+}
+
+export const AUTH_DIR = process.env.WA_AUTH_DIR ?? './data/wa-auth'
+
+/**
+ * Logger mudo. Baileys exige uno y por defecto escupe cada paquete del
+ * protocolo; en un journal compartido eso es ruido puro. Solo dejamos pasar
+ * los errores.
+ */
+export const loggerMudo: LoggerBaileys = {
+  level: 'silent',
+  child: () => loggerMudo,
+  trace: () => {},
+  debug: () => {},
+  info: () => {},
+  warn: () => {},
+  error: () => {},
+}
+
+/** Protobuf omite los ceros y a veces manda Long en vez de number. */
+function num(v: unknown): number {
+  if (typeof v === 'number') return v
+  if (typeof v === 'bigint') return Number(v)
+  if (v && typeof v === 'object' && 'toNumber' in v) {
+    return (v as { toNumber(): number }).toNumber()
+  }
+  return 0
+}
+
+/** El texto de un mensaje vive en distintos lugares segun el tipo. */
+function texto(m: WAMessage): string {
+  const c = m.message
+  if (!c) return ''
+  return (
+    c.conversation ??
+    c.extendedTextMessage?.text ??
+    c.imageMessage?.caption ??
+    c.videoMessage?.caption ??
+    c.documentMessage?.caption ??
+    ''
+  )
+}
+
+/** Personas y grupos. Fuera estados, canales y difusiones. */
+function esChatUtil(jid: string | null | undefined): jid is string {
+  if (!jid) return false
+  if (jid === 'status@broadcast') return false
+  if (jid.endsWith('@newsletter') || jid.endsWith('@broadcast')) return false
+  return jid.endsWith('@s.whatsapp.net') || jid.endsWith('@g.us')
+}
+
+function volcarChats(chats: Chat[]): void {
+  const filas: ChatGuardado[] = []
+  for (const c of chats) {
+    // TypeScript NO estrecha a traves de .filter() cuando la guarda mira una
+    // PROPIEDAD. Con for + continue si lo hace, y sin castear nada.
+    if (!esChatUtil(c.id)) continue
+    filas.push({
+      id: c.id,
+      name: c.name ?? '',
+      updatedAt: num(c.conversationTimestamp) || num(c.lastMessageRecvTimestamp),
+    })
+  }
+  guardarChats(filas)
+}
+
+function volcarMensajes(msgs: WAMessage[]): void {
+  const filas: MsgGuardado[] = []
+  for (const m of msgs) {
+    const jid = m.key?.remoteJid
+    const id = m.key?.id
+    const t = texto(m)
+    if (!esChatUtil(jid) || !id || !t) continue
+    const ts = num(m.messageTimestamp)
+    filas.push({ id, chatId: jid, out: Boolean(m.key?.fromMe), text: t, ts })
+    // Un mensaje nuevo tambien mueve el chat hacia arriba en la lista.
+    guardarChats([{ id: jid, name: '', updatedAt: ts }])
+  }
+  guardarMensajes(filas)
+}
+
+let sock: WASocket | null = null
+let conectando: Promise<WASocket> | null = null
+
+async function abrir(): Promise<WASocket> {
+  // Baileys 7 arrastra whatsapp-rust-bridge, que es SOLO-ESM (su package.json
+  // no declara condicion "require"). Este backend corre como CommonJS, asi que
+  // un import estatico lo tumba al arrancar -- y se llevaria a Telegram puesto.
+  // Con import() dinamico Node lo carga como ESM de verdad, y ademas los 9 MB
+  // de Baileys solo entran a memoria si alguien usa WhatsApp.
+  const { default: makeWASocket, useMultiFileAuthState, DisconnectReason } =
+    await import('baileys')
+
+  mkdirSync(AUTH_DIR, { recursive: true, mode: 0o700 })
+  const { state, saveCreds } = await useMultiFileAuthState(AUTH_DIR)
+
+  if (!state.creds.registered) {
+    throw new Error(
+      'WhatsApp no esta vinculado. Corre `npm run login-whatsapp` una vez.',
+    )
+  }
+
+  const s = makeWASocket({
+    auth: state,
+    logger: loggerMudo,
+    // Pide todo el historial que WhatsApp este dispuesto a mandar al vincular.
+    syncFullHistory: true,
+    // CRITICO: si nos marcamos "en linea", WhatsApp deja de mandar
+    // notificaciones al telefono porque cree que ya las estas viendo aca.
+    markOnlineOnConnect: false,
+  })
+
+  s.ev.on('creds.update', saveCreds)
+  s.ev.on('messaging-history.set', ({ chats, messages }) => {
+    volcarChats(chats)
+    volcarMensajes(messages)
+  })
+  s.ev.on('chats.upsert', volcarChats)
+  s.ev.on('chats.update', updates => {
+    volcarChats(updates.filter(u => u.id) as Chat[])
+  })
+  s.ev.on('messages.upsert', ({ messages }) => volcarMensajes(messages))
+
+  s.ev.on('connection.update', ({ connection, lastDisconnect }) => {
+    if (connection === 'close') {
+      const codigo = (lastDisconnect?.error as { output?: { statusCode?: number } })
+        ?.output?.statusCode
+      sock = null
+      conectando = null
+      if (codigo === DisconnectReason.loggedOut) {
+        console.error('[whatsapp] sesion cerrada desde el telefono: hay que vincular de nuevo')
+        return
+      }
+      console.warn(`[whatsapp] conexion caida (codigo ${codigo ?? '?'}); reconecta al proximo pedido`)
+    }
+    if (connection === 'open') console.log('[whatsapp] conectado')
+  })
+
+  return s
+}
+
+/** Socket unico y reutilizado, igual que el cliente de Telegram. */
+async function getSocket(): Promise<WASocket> {
+  if (sock) return sock
+  if (!conectando) {
+    conectando = abrir()
+      .then(s => { sock = s; return s })
+      .catch(err => { conectando = null; throw err })
+  }
+  return conectando
+}
+
+/**
+ * Adaptador de WhatsApp.
+ *
+ * Diferencia de fondo con Telegram: WhatsApp NO permite consultar historial.
+ * Los mensajes llegan por eventos, asi que este adaptador los va guardando en
+ * el almacen y las lecturas salen de ahi, no de la red.
+ */
+export const whatsapp: MessagingProvider = {
+  id: 'whatsapp',
+
+  async listContacts(limit = 20): Promise<Contact[]> {
+    await getSocket()
+    return listarChats(limit)
+  },
+
+  async getHistory(peer: string, limit = 10): Promise<Msg[]> {
+    await getSocket()
+    return historial(peer, limit)
+  },
+
+  async sendMessage(peer: string, text: string): Promise<void> {
+    const s = await getSocket()
+    await s.sendMessage(peer, { text })
+  },
+}

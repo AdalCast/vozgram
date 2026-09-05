@@ -75,9 +75,46 @@ Variables de `backend/.env`:
 | `APP_SECRET` | secreto compartido con el cliente, 64 hex |
 | `PORT`, `BIND_HOST` | por defecto `8787` y `127.0.0.1` |
 | `CORS_ORIGIN` | el WebView de iOS usa un origin local impredecible |
+| `MESSAGING_PROVIDER` | `telegram` (por defecto) o `whatsapp` |
+| `WA_AUTH_DIR` | sesión de WhatsApp, por defecto `./data/wa-auth` — **crítica** |
+| `WA_DB_PATH` | base de mensajes de WhatsApp, por defecto `./data/whatsapp.db` |
 
 El backend escucha **solo en loopback**. La única puerta de entrada es nginx,
 que hace proxy al puerto 8787 y termina el TLS.
+
+### WhatsApp (opcional)
+
+Se vincula **una sola vez**, con código de emparejamiento — no hay que escanear
+ningún QR:
+
+```bash
+npm run login-whatsapp -- 5215512345678   # con código de país, sin el +
+```
+
+Imprime 8 caracteres que se escriben en el teléfono, en WhatsApp → Ajustes →
+Dispositivos vinculados → Vincular con número de teléfono. Después:
+
+```
+MESSAGING_PROVIDER=whatsapp
+```
+
+**Advertencias que hay que leer antes:**
+
+- Baileys **no es oficial**: usarlo va contra los términos de servicio de
+  WhatsApp y existe riesgo real de que baneen el número.
+- `data/wa-auth/` da control de tu WhatsApp a quien la tenga. Nunca sale del
+  servidor, nunca entra a un backup sin cifrar. Está en el `.gitignore`.
+- **WhatsApp no permite consultar historial.** Los mensajes llegan por eventos
+  y este backend los guarda en SQLite (`node:sqlite`, incluido en Node 22+, sin
+  dependencias). Verás la conversación desde que vinculaste hacia adelante, más
+  lo que WhatsApp empuje al vincular. No es una limitación del código: es el
+  protocolo.
+- La versión publicada como `latest` de Baileys es un **release candidate**. La
+  última "estable" es de hace más de un año y, en una biblioteca de ingeniería
+  inversa, vieja significa rota. Por eso se fija la versión exacta.
+- Baileys arrastra `whatsapp-rust-bridge`, que es **solo-ESM**. Este backend es
+  CommonJS, así que Baileys se carga con `import()` dinámico: un import estático
+  tumba el servidor al arrancar y se lleva puesto a Telegram.
 
 ### Cliente (lentes)
 

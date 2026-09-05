@@ -7,9 +7,11 @@
     "start": "tsx src/server.ts",
     "login": "tsx src/login.ts",
     "typecheck": "tsc --noEmit",
-    "login-assisted": "tsx src/login-assisted.ts"
+    "login-assisted": "tsx src/login-assisted.ts",
+    "login-whatsapp": "tsx src/login-whatsapp.ts"
   },
   "dependencies": {
+    "baileys": "7.0.0-rc14",
     "cors": "^2.8.6",
     "dotenv": "^17.4.2",
     "express": "^5.2.1",

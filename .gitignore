@@ -10,3 +10,10 @@ dist/
 
 # Paquete construido: contiene el APP_SECRET inlineado por Vite
 *.ehpk
+
+# Credenciales de sesion de WhatsApp y base de mensajes.
+# Quien tenga wa-auth puede leer y escribir por vos en WhatsApp: NUNCA se sube.
+data/
+*.db
+*.db-wal
+*.db-shm
