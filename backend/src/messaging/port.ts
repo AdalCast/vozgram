@@ -25,14 +25,27 @@ export interface Msg {
   /** true = lo mandaste tu; false = te lo mandaron */
   out: boolean
   text: string
+  /**
+   * Quien lo escribio. Solo tiene sentido en GRUPOS: en un chat de a dos, `out`
+   * ya lo dice todo. Sin esto, en un grupo todos los mensajes se ven iguales y
+   * no se sabe quien dijo que.
+   */
+  sender?: string
 }
 
 export interface MessagingProvider {
   /** Identificador corto y estable. Sirve para elegir adaptador y para los logs. */
   readonly id: string
 
-  /** Chats recientes, para armar el menu de destinatarios en los lentes. */
-  listContacts(limit?: number): Promise<Contact[]>
+  /** Nombre para mostrarle a una persona, en el menu de mensajeros. */
+  readonly label: string
+
+  /**
+   * Chats recientes, para armar el menu de destinatarios en los lentes.
+   * Con `q`, filtra por nombre en TODOS los chats, no solo en los recientes:
+   * buscar sirve justamente para llegar a quien no esta arriba.
+   */
+  listContacts(limit?: number, q?: string): Promise<Contact[]>
 
   /** Ultimos mensajes de un chat, en orden cronologico (el mas viejo primero). */
   getHistory(peer: string, limit?: number): Promise<Msg[]>

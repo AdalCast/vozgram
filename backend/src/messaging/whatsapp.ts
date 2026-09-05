@@ -106,13 +106,21 @@ function volcarMensajes(msgs: WAMessage[]): void {
     const t = texto(m)
     if (!esChatUtil(jid) || !id || !t) continue
     const ts = num(m.messageTimestamp)
-    filas.push({ id, chatId: jid, out: Boolean(m.key?.fromMe), text: t, ts })
+    const esGrupo = jid.endsWith('@g.us')
+    const fromMe = Boolean(m.key?.fromMe)
+    // En grupos, pushName es el nombre de QUIEN escribio ese mensaje. Es la
+    // unica forma de distinguir participantes: sin esto todos se ven iguales.
+    const quien = esGrupo && !fromMe ? (m.pushName ?? '') : ''
+    filas.push({
+      id, chatId: jid, out: fromMe, text: t, ts,
+      ...(quien ? { sender: quien } : {}),
+    })
     // Un mensaje nuevo tambien mueve el chat hacia arriba en la lista.
     guardarChats([{ id: jid, name: '', updatedAt: ts }])
     // En un chat 1 a 1, pushName es el nombre de quien escribe: sirve para
     // ponerle cara al numero cuando no lo tenemos en la agenda. En grupos NO,
     // porque ahi pushName es el del participante, no el del grupo.
-    if (!jid.endsWith('@g.us') && !m.key?.fromMe && m.pushName) {
+    if (!esGrupo && !fromMe && m.pushName) {
       guardarContactos([{ id: jid, name: m.pushName }])
     }
   }
@@ -238,10 +246,11 @@ export async function resincronizarContactos(): Promise<void> {
  */
 export const whatsapp: MessagingProvider = {
   id: 'whatsapp',
+  label: 'WhatsApp',
 
-  async listContacts(limit = 20): Promise<Contact[]> {
+  async listContacts(limit = 20, q?: string): Promise<Contact[]> {
     await getSocket()
-    return listarChats(limit)
+    return listarChats(limit, q)
   },
 
   async getHistory(peer: string, limit = 10): Promise<Msg[]> {

@@ -2,7 +2,7 @@ import 'dotenv/config'
 import express from 'express'
 import cors from 'cors'
 import rateLimit from 'express-rate-limit'
-import { listarTodo, resolver } from './messaging'
+import { listarTodo, listarDe, mensajeros, resolver } from './messaging'
 
 const app = express()
 
@@ -95,11 +95,31 @@ app.post('/api/soniox-key', limiteSoniox, auth, async (_req, res) => {
   }
 })
 
-app.get('/api/contacts', auth, async (_req, res) => {
+/** Mensajeros disponibles. Alimenta el menu de apps de los lentes. */
+app.get('/api/providers', auth, (_req, res) => {
   try {
-    res.json({ contacts: await listarTodo() })
+    res.json({ providers: mensajeros() })
   } catch (err) {
     res.status(500).json({ error: String(err) })
+  }
+})
+
+/**
+ * Sin parametros devuelve la lista MEZCLADA: es lo que pide el .ehpk 0.9.0 ya
+ * instalado, y romperlo dejaria al usuario sin app hasta reinstalar.
+ * Con ?provider= devuelve solo ese mensajero; con ?q= busca por nombre.
+ */
+app.get('/api/contacts', auth, async (req, res) => {
+  const provider = String(req.query.provider ?? '').trim()
+  const q = String(req.query.q ?? '').trim() || undefined
+  const limit = Math.min(Number(req.query.limit ?? 20) || 20, 100)
+  try {
+    const contacts = provider
+      ? await listarDe(provider, limit, q)
+      : await listarTodo(limit, q)
+    res.json({ contacts })
+  } catch (err) {
+    res.status(400).json({ error: String(err) })
   }
 })
 

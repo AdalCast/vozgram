@@ -70,11 +70,11 @@ export function resolver(peer: string): { proveedor: MessagingProvider; peer: st
  * Usa allSettled a proposito: si WhatsApp esta caido, la lista debe seguir
  * mostrando Telegram. Un mensajero roto no puede dejar al usuario sin app.
  */
-export async function listarTodo(limitPorMensajero = 20): Promise<Contact[]> {
+export async function listarTodo(limitPorMensajero = 20, q?: string): Promise<Contact[]> {
   const proveedores = activos()
 
   const resultados = await Promise.allSettled(
-    proveedores.map(p => p.listContacts(limitPorMensajero)),
+    proveedores.map(p => p.listContacts(limitPorMensajero, q)),
   )
 
   const aportaron: MessagingProvider[] = []
@@ -102,4 +102,25 @@ export async function listarTodo(limitPorMensajero = 20): Promise<Contact[]> {
   }
 
   return juntos.sort((a, b) => (b.updatedAt ?? 0) - (a.updatedAt ?? 0))
+}
+
+/** Mensajeros disponibles, para armar el menu de apps en los lentes. */
+export function mensajeros(): { id: string; label: string }[] {
+  return activos().map(p => ({ id: p.id, label: p.label }))
+}
+
+/**
+ * Chats de UN solo mensajero, con los ids igual de prefijados que en la lista
+ * mezclada: asi el peer que vuelve se enruta igual, sin casos especiales.
+ */
+export async function listarDe(id: string, limit = 20, q?: string): Promise<Contact[]> {
+  const p = registro[id]
+  if (!p) {
+    throw new Error(
+      `mensajero desconocido: "${id}". Disponibles: ${Object.keys(registro).join(', ')}`,
+    )
+  }
+  const chats = await p.listContacts(limit, q)
+  // Sin marca TG/WA: dentro de una lista de un solo mensajero seria ruido.
+  return chats.map(c => ({ ...c, id: `${p.id}${SEP}${c.id}` }))
 }

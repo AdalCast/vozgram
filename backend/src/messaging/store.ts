@@ -2,6 +2,7 @@ import { DatabaseSync } from 'node:sqlite'
 import { mkdirSync } from 'node:fs'
 import { dirname } from 'node:path'
 import type { Contact, Msg } from './port'
+import { normalizar } from './texto'
 
 /**
  * Almacen para mensajeros que NO permiten consultar historial.
@@ -45,8 +46,18 @@ function conn(): DatabaseSync {
       name TEXT NOT NULL
     );
   `)
+
+  // MIGRACION. `CREATE TABLE IF NOT EXISTS` no toca una tabla que ya existe,
+  // asi que una columna nueva hay que agregarla a mano o los datos viejos se
+  // quedan sin ella. Se consulta el esquema real antes de tocar nada.
+  const cols = db.prepare('PRAGMA table_info(messages)').all() as { name: string }[]
+  if (!cols.some(c => c.name === 'sender')) {
+    db.exec('ALTER TABLE messages ADD COLUMN sender TEXT')
+  }
+
   return db
 }
+
 
 export interface ChatGuardado {
   id: string
@@ -85,6 +96,8 @@ export interface MsgGuardado {
   out: boolean
   text: string
   ts: number
+  /** Quien escribio. Solo se usa en grupos. */
+  sender?: string
 }
 
 /**
@@ -115,12 +128,12 @@ export function guardarMensajes(msgs: MsgGuardado[]): void {
   if (msgs.length === 0) return
   const c = conn()
   const stmt = c.prepare(`
-    INSERT INTO messages (id, chat_id, out, text, ts) VALUES (?, ?, ?, ?, ?)
+    INSERT INTO messages (id, chat_id, out, text, ts, sender) VALUES (?, ?, ?, ?, ?, ?)
     ON CONFLICT(id) DO NOTHING
   `)
   c.exec('BEGIN')
   try {
-    for (const m of msgs) stmt.run(m.id, m.chatId, m.out ? 1 : 0, m.text, m.ts)
+    for (const m of msgs) stmt.run(m.id, m.chatId, m.out ? 1 : 0, m.text, m.ts, m.sender ?? null)
     c.exec('COMMIT')
   } catch (err) {
     c.exec('ROLLBACK')
@@ -158,7 +171,11 @@ export function numeroLegible(jid: string): string {
  * El nombre se resuelve en cascada: el del chat (grupos), si no el del
  * contacto (personas), y como ultimo recurso el numero pelado.
  */
-export function listarChats(limit = 20): Contact[] {
+export function listarChats(limit = 20, q?: string): Contact[] {
+  // Al buscar se traen TODOS los chats y se filtra en JS: son un par de cientos
+  // de filas, y SQLite no sabe comparar sin acentos. Hacerlo aca es correcto y
+  // mas barato que ensuciar el esquema con una columna normalizada.
+  const tope = q ? 5000 : limit
   const filas = conn()
     .prepare(`
       SELECT ch.id AS id,
@@ -169,13 +186,23 @@ export function listarChats(limit = 20): Contact[] {
       ORDER BY ch.updated_at DESC
       LIMIT ?
     `)
-    .all(limit) as { id: string; name: string; updatedAt: number }[]
-  return filas.map(f => ({
+    .all(tope) as { id: string; name: string; updatedAt: number }[]
+
+  let salida = filas.map(f => ({
     id: f.id,
     // Si la cascada del SQL terminó cayendo en el id, lo volvemos legible.
     name: f.name === f.id ? numeroLegible(f.id) : f.name,
     updatedAt: f.updatedAt,
   }))
+
+  if (q) {
+    const aguja = normalizar(q)
+    // Tambien se busca en el id: sirve para llegar por numero de telefono.
+    salida = salida
+      .filter(c => normalizar(c.name).includes(aguja) || c.id.includes(aguja))
+      .slice(0, limit)
+  }
+  return salida
 }
 
 /**
@@ -184,7 +211,13 @@ export function listarChats(limit = 20): Contact[] {
  */
 export function historial(chatId: string, limit = 10): Msg[] {
   const filas = conn()
-    .prepare('SELECT out, text FROM messages WHERE chat_id = ? ORDER BY ts DESC LIMIT ?')
-    .all(chatId, limit) as { out: number; text: string }[]
-  return filas.map(f => ({ out: f.out === 1, text: f.text })).reverse()
+    .prepare('SELECT out, text, sender FROM messages WHERE chat_id = ? ORDER BY ts DESC LIMIT ?')
+    .all(chatId, limit) as { out: number; text: string; sender: string | null }[]
+  return filas
+    .map(f => ({
+      out: f.out === 1,
+      text: f.text,
+      ...(f.sender ? { sender: f.sender } : {}),
+    }))
+    .reverse()
 }
