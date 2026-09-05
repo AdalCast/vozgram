@@ -1,0 +1,12 @@
+node_modules/
+dist/
+*.log
+.DS_Store
+
+# Secretos: NUNCA se publican
+.env*
+# ...pero la plantilla SI, es lo que necesita quien clone el repo
+!.env.example
+
+# Paquete construido: contiene el APP_SECRET inlineado por Vite
+*.ehpk

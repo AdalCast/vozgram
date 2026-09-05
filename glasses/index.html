@@ -1,0 +1,52 @@
+<!doctype html>
+<html lang="es">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+    <title>VozGram</title>
+    <style>
+      :root { color-scheme: dark; }
+      * { box-sizing: border-box; }
+      body {
+        margin: 0; min-height: 100vh;
+        background: #07120b; color: #7de08a;
+        font: 15px/1.5 ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+        display: flex; flex-direction: column; align-items: center;
+        padding: 20px 16px calc(20px + env(safe-area-inset-bottom));
+        gap: 14px; -webkit-user-select: none; user-select: none;
+      }
+      header { text-align: center; }
+      h1 { margin: 0; font-size: 19px; letter-spacing: .16em; color: #b9ffc6; }
+      .sub { font-size: 12px; opacity: .55; margin-top: 4px; }
+      /* Espejo de la pantalla del G2: 576x288, verde sobre negro */
+      #screen {
+        width: 100%; max-width: 576px; aspect-ratio: 576 / 288;
+        background: #000; border: 1px solid #1f5c30; border-radius: 10px;
+        padding: 14px; overflow: hidden; white-space: pre-wrap; word-break: break-word;
+        color: #35ff5b; font-size: 14px; line-height: 1.45;
+        text-shadow: 0 0 6px rgba(53,255,91,.45);
+      }
+      #state { font-size: 12px; opacity: .6; text-align: center; min-height: 1.4em; }
+      footer { font-size: 11px; opacity: .38; text-align: center; max-width: 420px; }
+    </style>
+  </head>
+  <body>
+    <header>
+      <h1>VOZGRAM</h1>
+      <div class="sub">Telegram por voz · Even Realities G2</div>
+    </header>
+
+    <!-- Espejo de lo que se ve en los lentes. Sin esto la WebView queda en
+         blanco, que ademas es causal de rechazo en el review de Even Hub. -->
+    <div id="screen">Conectando con los lentes...</div>
+    <div id="state"></div>
+
+    <footer>
+      Esta pantalla refleja lo que aparece en tus lentes.<br />
+      Usa el touchpad de los lentes para navegar.
+    </footer>
+
+    <div id="app" hidden></div>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

@@ -1,0 +1,28 @@
+{
+  "package_id": "com.castech.vozgram",
+  "edition": "202601",
+  "name": "VozGram",
+  "version": "0.9.0",
+  "min_app_version": "2.2.9",
+  "min_sdk_version": "0.0.14",
+  "entrypoint": "index.html",
+  "permissions": [
+    {
+      "name": "g2-microphone",
+      "desc": "Captura tu voz desde los microfonos de los lentes para dictar el mensaje."
+    },
+    {
+      "name": "network",
+      "desc": "Envia el audio a transcripcion y el mensaje final a Telegram.",
+      "whitelist": [
+        "https://TU-SERVIDOR.example.org",
+        "https://stt-rt.soniox.com",
+        "wss://stt-rt.soniox.com"
+      ]
+    }
+  ],
+  "supported_languages": [
+    "es",
+    "en"
+  ]
+}
