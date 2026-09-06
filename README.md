@@ -18,6 +18,9 @@ se enruta solo a su servicio.
 > servicio de WhatsApp y existe riesgo real de que baneen el número. Es una
 > decisión informada de quien lo instala, no un detalle menor.
 
+> **¿Cómo está armado por dentro?** Dependencias, diagramas de flujo y las
+> decisiones detrás de cada pieza: **[docs/ARQUITECTURA.md](docs/ARQUITECTURA.md)**
+
 ## Cómo funciona
 
 ```
