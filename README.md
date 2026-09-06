@@ -30,6 +30,36 @@ VPS**. El paquete `.ehpk` es extraíble una vez publicado: nunca metas secretos
 ahí. Lo único que viaja en el cliente es el `APP_SECRET` — un tradeoff conocido
 y aceptado por tratarse de una app privada de un solo usuario.
 
+## Cómo se ve
+
+Capturas del simulador oficial, con **datos inventados**: ni un contacto ni un
+mensaje real. Pantalla de 576x288 en escala de grises; el verde es del
+simulador, en los lentes se ve monocromo.
+
+**Elegir mensajero.** Con un solo mensajero configurado esta pantalla se salta:
+un menú de un elemento sería un paso regalado.
+
+![Menú de mensajeros](docs/capturas/1-menu-mensajeros.png)
+
+**Los chats de esa app,** ordenados por actividad. Mantener presionado aquí
+abre la búsqueda por voz.
+
+![Lista de chats](docs/capturas/2-lista-de-chats.png)
+
+**La conversación.** En grupos se muestra quién habló: sin eso, todos los
+mensajes ajenos se verían iguales.
+
+![Conversación](docs/capturas/3-conversacion.png)
+
+**Dictando.** El micrófono se enciende SOLO mientras mantienes presionado, y
+se apaga al soltar. Nunca escucha solo.
+
+![Dictado](docs/capturas/4-dictado.png)
+
+**Confirmar antes de enviar.** Un tap manda, doble tap vuelve a dictar.
+
+![Confirmar](docs/capturas/5-confirmar.png)
+
 ## Interacción
 
 | Pantalla | Tap | Mantener | Soltar | Doble tap |
