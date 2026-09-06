@@ -64,12 +64,18 @@ function texto(m: WAMessage): string {
   )
 }
 
-/** Personas y grupos. Fuera estados, canales y difusiones. */
+/**
+ * Personas y grupos. Fuera estados, canales y difusiones.
+ *
+ * `@lid` es OBLIGATORIO aceptarlo: WhatsApp esta migrando a ese identificador
+ * -- que no expone el numero -- y ya crea con el las conversaciones nuevas.
+ * Rechazarlo hacia que los mensajes llegaran y se tiraran en silencio.
+ */
 function esChatUtil(jid: string | null | undefined): jid is string {
   if (!jid) return false
   if (jid === 'status@broadcast') return false
   if (jid.endsWith('@newsletter') || jid.endsWith('@broadcast')) return false
-  return jid.endsWith('@s.whatsapp.net') || jid.endsWith('@g.us')
+  return jid.endsWith('@s.whatsapp.net') || jid.endsWith('@g.us') || jid.endsWith('@lid')
 }
 
 function volcarChats(chats: Chat[]): void {
@@ -99,13 +105,28 @@ function volcarContactos(cs: { id?: string | null; name?: string | null; notify?
   guardarContactos(filas)
 }
 
+/** Diagnostico: cuenta lo que llega y lo que se descarta, con el motivo. */
+const descartes = new Map<string, number>()
+function anotarDescarte(motivo: string): void {
+  descartes.set(motivo, (descartes.get(motivo) ?? 0) + 1)
+}
+
 function volcarMensajes(msgs: WAMessage[]): void {
   const filas: MsgGuardado[] = []
   for (const m of msgs) {
     const jid = m.key?.remoteJid
     const id = m.key?.id
     const t = texto(m)
-    if (!esChatUtil(jid) || !id || !t) continue
+    // El sufijo se calcula ANTES de la guarda a proposito: `esChatUtil` declara
+    // `jid is string`, asi que TypeScript cree que en la rama negativa no puede
+    // haber strings. Es falso -- un "@lid" es un string que la guarda rechaza --
+    // y esa mentira del tipo tapaba justo el dato que hace falta para depurar.
+    const sufijo = typeof jid === 'string' && jid.includes('@')
+      ? jid.slice(jid.indexOf('@'))
+      : '(sin jid)'
+    if (!esChatUtil(jid)) { anotarDescarte(`jid ${sufijo}`); continue }
+    if (!id) { anotarDescarte('sin id'); continue }
+    if (!t) { anotarDescarte('sin texto'); continue }
     const ts = num(m.messageTimestamp)
     const esGrupo = jid.endsWith('@g.us')
     const fromMe = Boolean(m.key?.fromMe)
@@ -131,7 +152,9 @@ function volcarMensajes(msgs: WAMessage[]): void {
 let sock: WASocket | null = null
 let conectando: Promise<WASocket> | null = null
 let reintentos = 0
+let vigilante: ReturnType<typeof setInterval> | null = null
 const MAX_REINTENTOS = 10
+const SALUD_MS = 60_000
 
 async function abrir(): Promise<WASocket> {
   // Baileys 7 arrastra whatsapp-rust-bridge, que es SOLO-ESM (su package.json
@@ -177,7 +200,17 @@ async function abrir(): Promise<WASocket> {
   s.ev.on('chats.update', updates => {
     volcarChats(updates.filter(u => u.id) as Chat[])
   })
-  s.ev.on('messages.upsert', ({ messages }) => volcarMensajes(messages))
+  s.ev.on('messages.upsert', ({ messages }) => {
+    volcarMensajes(messages)
+    // Solo se avisa cuando algo se TIRA. En el camino feliz el log queda
+    // callado; cuando algo se cae, dice que y por que. Un descarte silencioso
+    // es peor que un error ruidoso: este bug nos costo dos horas justamente
+    // porque los mensajes llegaban y desaparecian sin dejar rastro.
+    if (descartes.size) {
+      console.warn('[whatsapp] mensajes descartados:', JSON.stringify(Object.fromEntries(descartes)))
+      descartes.clear()
+    }
+  })
 
   s.ev.on('connection.update', ({ connection, lastDisconnect }) => {
     if (connection === 'open') {
@@ -224,9 +257,32 @@ async function abrir(): Promise<WASocket> {
   return s
 }
 
+/**
+ * Vigilante de salud.
+ *
+ * El evento 'close' NO siempre llega: un socket puede morirse en silencio y
+ * quedarse ahi, guardado y aparentemente sano. Sin esto seguimos devolviendo un
+ * socket muerto, dejamos de recibir mensajes y NADIE se entera -- que es
+ * exactamente lo que paso: 1h44 sin un solo mensaje nuevo y ni una linea en el
+ * log. En WhatsApp lo que no se recibe conectado no se puede pedir despues.
+ */
+function vigilar(): void {
+  if (vigilante) return
+  vigilante = setInterval(() => {
+    if (!sock || !sock.ws.isClosed) return
+    console.warn('[whatsapp] el socket murio sin avisar; reconectando')
+    sock = null
+    conectando = null
+    void getSocket().catch(() => {})
+  }, SALUD_MS)
+}
+
 /** Socket unico y reutilizado, igual que el cliente de Telegram. */
 async function getSocket(): Promise<WASocket> {
-  if (sock) return sock
+  // isClosed y no isOpen: recien creado el socket esta CONECTANDO, y tratarlo
+  // como muerto ahi nos metia en un ciclo de reconexion.
+  if (sock && !sock.ws.isClosed) return sock
+  if (sock) { sock = null; conectando = null }
   if (!conectando) {
     conectando = abrir()
       .then(s => { sock = s; return s })
@@ -250,6 +306,20 @@ export async function resincronizarContactos(): Promise<void> {
 }
 
 /**
+ * Conecta al arrancar el servidor y deja el vigilante corriendo.
+ *
+ * Antes la conexion era PEREZOSA: solo se abria cuando llegaba un pedido HTTP.
+ * Para una app que tiene que RECIBIR mensajes eso esta mal: con los lentes
+ * cerrados, el backend no escuchaba a nadie.
+ */
+export function iniciar(): void {
+  vigilar()
+  void getSocket().catch(err => {
+    console.warn('[whatsapp] no se pudo conectar al arrancar:', String(err).slice(0, 120))
+  })
+}
+
+/**
  * Cruza los chats sin nombre contra los contactos que llegaron identificados
  * con @lid.
  *
@@ -264,14 +334,26 @@ export async function vincularNombresLid(): Promise<number> {
   if (pendientes.length === 0) return 0
 
   const s = await getSocket()
-  const mapas = await s.signalRepository.lidMapping.getLIDsForPNs(pendientes)
-  if (!mapas?.length) return 0
-
   const filas: ContactoGuardado[] = []
-  for (const m of mapas) {
-    const nombre = nombreGuardado(m.lid)
-    if (nombre) filas.push({ id: m.pn, name: nombre })
+
+  // Ida: chat identificado por telefono -> nombre que llego bajo su @lid.
+  const porTelefono = pendientes.filter(j => j.endsWith('@s.whatsapp.net'))
+  if (porTelefono.length) {
+    const mapas = await s.signalRepository.lidMapping.getLIDsForPNs(porTelefono)
+    for (const m of mapas ?? []) {
+      const nombre = nombreGuardado(m.lid)
+      if (nombre) filas.push({ id: m.pn, name: nombre })
+    }
   }
+
+  // Vuelta: chat identificado por @lid -> nombre que tengamos por telefono.
+  for (const lid of pendientes.filter(j => j.endsWith('@lid'))) {
+    const pn = await s.signalRepository.lidMapping.getPNForLID(lid).catch(() => null)
+    if (!pn) continue
+    const nombre = nombreGuardado(pn)
+    if (nombre) filas.push({ id: lid, name: nombre })
+  }
+
   guardarContactos(filas)
   return filas.length
 }

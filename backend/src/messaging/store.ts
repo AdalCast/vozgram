@@ -150,6 +150,9 @@ export function guardarMensajes(msgs: MsgGuardado[]): void {
  *   5216643637705@s.whatsapp.net  ->  +52 664 363 7705
  */
 export function numeroLegible(jid: string): string {
+  // Un @lid no lleva el telefono adentro: no hay numero que mostrar. Si no
+  // tiene nombre todavia, se dice eso y no se inventa nada.
+  if (jid.endsWith('@lid')) return 'Contacto sin nombre'
   // SOLO personas. El id de un grupo es un numero largo que no es telefono de
   // nadie: formatearlo inventaria un contacto que no existe.
   if (!jid.endsWith('@s.whatsapp.net')) return 'Grupo'
@@ -212,7 +215,7 @@ export function chatsSinNombre(): string[] {
       SELECT ch.id AS id
       FROM chats ch
       LEFT JOIN contacts co ON co.id = ch.id
-      WHERE ch.id LIKE '%@s.whatsapp.net'
+      WHERE (ch.id LIKE '%@s.whatsapp.net' OR ch.id LIKE '%@lid')
         AND (co.id IS NULL OR co.name = '')
     `)
     .all() as { id: string }[]

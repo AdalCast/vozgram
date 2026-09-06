@@ -148,6 +148,13 @@ app.post('/api/send', auth, async (req, res) => {
   }
 })
 
+// WhatsApp necesita estar conectado para RECIBIR: los mensajes llegan por
+// eventos y lo que no se recibe conectado no se puede pedir despues. Se lanza
+// sin await y sin romper el arranque si no esta configurado.
+void import('./messaging/whatsapp')
+  .then(m => m.iniciar())
+  .catch(() => { /* sin WhatsApp configurado, el resto sigue igual */ })
+
 const port = Number(process.env.PORT ?? 8787)
 // Atado a loopback A PROPOSITO: el unico camino de entrada es nginx con TLS.
 // No dependemos de que el firewall este bien configurado.
