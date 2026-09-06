@@ -15,6 +15,14 @@ export const LIST_ID = 2
 export const LIST_NAME = 'contacts'
 export const CLOCK_ID = 3
 export const CLOCK_NAME = 'clock'
+export const TITLE_ID = 4
+export const TITLE_NAME = 'title'
+/**
+ * Alto de la barra superior: reloj a la derecha, titulo a la izquierda.
+ * Verificado en el simulador: con 26 el primer contacto quedaba pegado al
+ * titulo. 32 le da aire sin comerse un renglon de la lista.
+ */
+const BAR_H = 32
 
 /**
  * Reloj: contenedor propio arriba a la derecha, presente en TODAS las pantallas.
@@ -38,6 +46,29 @@ export function clockContainer(hhmm: string): TextContainerProperty {
   })
 }
 
+/**
+ * Titulo de la lista: en que app estas y, si hay busqueda, que buscaste.
+ * Sin esto, dos listas identicas de nombres serian indistinguibles.
+ */
+export function titleContainer(text: string): TextContainerProperty {
+  return new TextContainerProperty({
+    xPosition: 4,
+    yPosition: 2,
+    width: SCREEN_W - 112,   // hasta donde empieza el reloj
+    height: BAR_H,
+    borderWidth: 0,
+    borderColor: 5,
+    paddingLength: 0,
+    containerID: TITLE_ID,
+    containerName: TITLE_NAME,
+    content: text,
+    isEventCapture: 0,
+    // UNICO en la pagina: no alcanza con que todos declaren zOrderIndex, ademas
+    // no se pueden repetir (DUPLICATE_Z_ORDER_INDEX). El reloj usa el 2.
+    zOrderIndex: 3,
+  })
+}
+
 export function textPage(content: string): TextContainerProperty {
   return new TextContainerProperty({
     xPosition: 0,
@@ -58,9 +89,11 @@ export function textPage(content: string): TextContainerProperty {
 export function listPage(names: string[]): ListContainerProperty {
   return new ListContainerProperty({
     xPosition: 0,
-    yPosition: 0,
+    // Baja lo que mide la barra: si arrancara en 0, el titulo taparia el
+    // primer contacto de la lista.
+    yPosition: BAR_H,
     width: SCREEN_W,
-    height: SCREEN_H,
+    height: SCREEN_H - BAR_H,
     borderWidth: 0,
     borderColor: 5,
     paddingLength: 4,
@@ -91,9 +124,10 @@ export const rebuildWithText = (content: string, hhmm: string) =>
     textObject: [textPage(content), clockContainer(hhmm)],
   })
 
-export const rebuildWithList = (names: string[], hhmm: string) =>
+// La lista lleva reloj Y titulo: tres contenedores.
+export const rebuildWithList = (names: string[], hhmm: string, title: string) =>
   new RebuildPageContainer({
-    containerTotalNum: 2,
+    containerTotalNum: 3,
     listObject: [listPage(names)],
-    textObject: [clockContainer(hhmm)],
+    textObject: [clockContainer(hhmm), titleContainer(title)],
   })

@@ -5,21 +5,28 @@ import {
   OsEventTypeList,
 } from '@evenrealities/even_hub_sdk'
 import { SonioxStream } from './soniox'
-import { getContacts, getMessages, sendMessage, type Contact, type Msg } from './api'
+import {
+  getProviders, getContacts, getMessages, sendMessage,
+  type Provider, type Contact, type Msg,
+} from './api'
 import { TEXT_ID, TEXT_NAME, CLOCK_ID, CLOCK_NAME, startUpWithText, rebuildWithText, rebuildWithList } from './ui'
 
 // ---------------------------------------------------------------------------
-// VozGram — push-to-talk.
+// VozGram — push-to-talk, dos mensajeros.
 //
-//   PICK    lista      tap = elegir contacto      doble = salir (sistema)
-//   READY   texto      MANTENER = hablar          doble = volver a PICK
-//   DICTATE texto      SOLTAR   = terminar
-//   CONFIRM texto      tap = ENVIAR               doble = redictar
+//   APPS    lista   tap = elegir app          doble = salir (sistema)
+//   PICK    lista   tap = elegir chat         doble = atras
+//                   MANTENER = buscar por voz
+//   SEARCH  texto   SOLTAR = buscar
+//   READ    texto   swipe = paginar           doble = volver a la lista
+//                   MANTENER = responder
+//   DICTATE texto   SOLTAR = terminar
+//   CONFIRM texto   tap = ENVIAR              doble = repetir
 //
 // El microfono SOLO se enciende mientras se mantiene presionado. Nunca escucha solo.
 // ---------------------------------------------------------------------------
 
-type Screen = 'PICK' | 'READ' | 'DICTATE' | 'CONFIRM'
+type Screen = 'APPS' | 'PICK' | 'SEARCH' | 'READ' | 'DICTATE' | 'CONFIRM'
 
 const STORAGE_KEY = 'vozgram.draft'
 const MAX_VISIBLE = 400
@@ -34,7 +41,10 @@ const HISTORY = 10           // ultimos mensajes a traer
 const POLL_MS = 10_000       // cada cuanto revisamos si llego respuesta
 const CLOCK_MS = 15_000      // cada cuanto revisamos si cambio el minuto
 
-let screen: Screen = 'PICK'
+let screen: Screen = 'APPS'
+let providers: Provider[] = []
+let provider: Provider | null = null
+let query = ''               // busqueda activa, '' = sin filtro
 let contacts: Contact[] = []
 let target: Contact | null = null
 let draft = ''
@@ -127,11 +137,11 @@ async function gotoText(content: string): Promise<void> {
   await bleCall(() => bridge.rebuildPageContainer(rebuildWithText(lastRendered, clockShown)), 'rebuild:text')
 }
 
-async function gotoList(names: string[]): Promise<void> {
+async function gotoList(names: string[], title: string): Promise<void> {
   lastRendered = ''
-  mirror(names.map((n, i) => `${i === 0 ? '>' : ' '} ${n}`).join('\n'))
+  mirror(`${title}\n\n${names.map((n, i) => `${i === 0 ? '>' : ' '} ${n}`).join('\n')}`)
   clockShown = hhmm()
-  await bleCall(() => bridge.rebuildPageContainer(rebuildWithList(names, clockShown)), 'rebuild:list')
+  await bleCall(() => bridge.rebuildPageContainer(rebuildWithList(names, clockShown, title)), 'rebuild:list')
 }
 
 // --- Persistencia -----------------------------------------------------------
@@ -145,7 +155,16 @@ function persist(): void {
 
 // --- Vistas -----------------------------------------------------------------
 const who = () => target?.name ?? '?'
-const firstName = () => who().split(' ')[0]
+const firstName = () => who().split(' ')[0] ?? '?'
+
+/** Titulo de la lista: en que app estas y, si hay busqueda, que buscaste. */
+const tituloLista = () => {
+  const app = provider?.label ?? 'Chats'
+  return query ? `${app}: ${query}` : app
+}
+
+/** PICK es la raiz solo cuando no hay menu de apps que mostrar. */
+const pickEsRaiz = () => providers.length <= 1
 
 /** Cuantos renglones ocupa realmente un mensaje al renderizarse. */
 const renglones = (t: string) => Math.max(1, Math.ceil(t.length / CHARS_PER_LINE))
@@ -163,7 +182,11 @@ function paginate(msgs: Msg[]): string[] {
   // un mensaje del siguiente usamos lo que si funciona en monocromo:
   // MAYUSCULAS en el nombre y una linea en blanco entre mensajes.
   for (const m of msgs) {
-    const linea = `${m.out ? 'YO' : firstName().toUpperCase()}: ${m.text}`
+    // En un GRUPO, sender dice quien hablo. Sin eso, todos los mensajes ajenos
+    // saldrian con el nombre del grupo y no se sabria quien dijo que.
+    const bruto = m.sender ? (m.sender.split(' ')[0] ?? m.sender) : firstName()
+    const quien = m.out ? 'YO' : bruto.toUpperCase()
+    const linea = `${quien}: ${m.text}`
     const n = renglones(linea) + (buf.length > 0 ? 1 : 0)   // +1 por el blanco
     if (buf.length > 0 && usadas + n > BODY_LINES) {
       out.push(buf.join('\n\n')); buf = [linea]; usadas = renglones(linea)
@@ -179,38 +202,66 @@ const readView = () => {
   const nav = pages.length > 1 ? `  ${page + 1}/${pages.length}` : ''
   return `${who()}${nav}\n\n${pages[page] ?? ''}\n\n*mantener tap para responder`
 }
-/**
- * Vista de grabacion. El diagnostico solo aparece cuando algo NO esta bien:
- * con todo funcionando la pantalla queda limpia, y si falla algo te dice que.
- */
+
+/** Diagnostico compartido: solo aparece cuando algo NO esta bien. */
+function diagnostico(): string {
+  const sano = micOk === true && soniox?.state === 'OPEN' && !lastNote
+  if (sano) return ''
+  const mic = micOk === null ? '...' : micOk ? 'ON' : 'FALLO'
+  const aviso = lastNote ? `\n${lastNote}` : ''
+  return `  [mic:${mic} ws:${soniox?.state ?? 'NULL'} chunks:${chunks}]${aviso}`
+}
+
 function dictateView(t: string): string {
   const cuerpo = tail(t.trim())
-  const sano = micOk === true && soniox?.state === 'OPEN' && !lastNote
-  if (!sano) {
-    const mic = micOk === null ? '...' : micOk ? 'ON' : 'FALLO'
-    const diag = `mic:${mic} ws:${soniox?.state ?? 'NULL'} chunks:${chunks}`
-    const aviso = lastNote ? `\n${lastNote}` : ''
-    return `> ${who()}  [${diag}]${aviso}\n\n${cuerpo || 'Habla... (suelta para terminar)'}`
-  }
-  return `> ${who()}\n\n${cuerpo || 'Habla... (suelta para terminar)'}`
+  return `> ${who()}${diagnostico()}\n\n${cuerpo || 'Habla... (suelta para terminar)'}`
+}
+
+function searchView(t: string): string {
+  const cuerpo = tail(t.trim())
+  const app = provider?.label ?? 'los chats'
+  return `Buscar en ${app}${diagnostico()}\n\n${cuerpo || 'Di un nombre... (suelta para buscar)'}`
+}
+
+/** Repinta la pantalla de voz que corresponda, sea dictado o busqueda. */
+function pintarVoz(t: string): void {
+  if (screen === 'DICTATE') setText(dictateView(t))
+  else if (screen === 'SEARCH') setText(searchView(t))
 }
 
 // --- Soniox -----------------------------------------------------------------
 let soniox: SonioxStream | null = null
 
-/** Se conecta al entrar en READ, pero SIN prender el microfono. */
+/** Se conecta al entrar, pero SIN prender el microfono. */
 async function prepare(): Promise<void> {
   soniox = new SonioxStream({
-    onPartial: t => { if (screen === 'DICTATE') setText(dictateView(t)) },
-    onFinal: t => {
-      draft = t
-      if (screen === 'DICTATE') setText(dictateView(t))
-      persist()
-    },
-    onError: m => { lastNote = `STT: ${m}`; if (screen === 'DICTATE') setText(dictateView(draft)) },
-    onClosed: c => { lastNote = `socket cerrado (${c})`; if (screen === 'DICTATE') setText(dictateView(draft)) },
+    onPartial: t => pintarVoz(t),
+    onFinal: t => { draft = t; pintarVoz(t); if (screen === 'DICTATE') persist() },
+    onError: m => { lastNote = `STT: ${m}`; pintarVoz(draft) },
+    onClosed: c => { lastNote = `socket cerrado (${c})`; pintarVoz(draft) },
   })
   await soniox.connect()
+}
+
+/** Enciende el microfono. Comun al dictado y a la busqueda. */
+async function encenderMic(): Promise<void> {
+  micOk = null; chunks = 0; bytes = 0; lastNote = ''; draft = ''
+  if (!soniox) { try { await prepare() } catch { /* ya se mostro el error */ } }
+  // audioControl devuelve boolean. Ignorarlo fue el bug: la pantalla decia
+  // "Grabando" con el microfono apagado.
+  try {
+    micOk = await bridge.audioControl(true, AudioInputSource.Glasses)
+  } catch (err) {
+    micOk = false
+    lastNote = `audioControl: ${String(err).slice(0, 60)}`
+  }
+}
+
+async function apagarMic(): Promise<void> {
+  lastReleaseAt = Date.now()
+  await bridge.audioControl(false)
+  soniox?.close()
+  soniox = null
 }
 
 /**
@@ -225,7 +276,7 @@ async function refresh(): Promise<void> {
   if (screen !== 'READ') return
 
   const nuevas = paginate(msgs)
-  if (nuevas.join('\u0000') === pages.join('\u0000')) return   // nada cambio
+  if (nuevas.join('|') === pages.join('|')) return   // nada cambio
 
   const estabaAlFinal = page >= pages.length - 1
   pages = nuevas
@@ -239,6 +290,42 @@ function startPolling(): void {
 }
 function stopPolling(): void {
   if (pollTimer !== undefined) { clearInterval(pollTimer); pollTimer = undefined }
+}
+
+// --- Navegacion -------------------------------------------------------------
+async function toApps(): Promise<void> {
+  stopPolling()
+  screen = 'APPS'
+  target = null; provider = null; query = ''
+  await apagarMic()
+  await gotoList(providers.map(p => p.label), 'VozGram')
+}
+
+/**
+ * Lista de chats. `recargar` en false reusa lo que ya trajimos: volver desde
+ * un chat no justifica otra vuelta a la red.
+ */
+async function toPick(recargar = true): Promise<void> {
+  stopPolling()
+  screen = 'PICK'
+  target = null
+  await apagarMic()
+
+  if (recargar) {
+    await gotoList(['cargando...'], tituloLista())
+    try {
+      contacts = (await getContacts(provider?.id, query || undefined)).contacts
+    } catch (err) {
+      await gotoText(`No se pudo cargar la lista.\n${String(err)}\n\n(doble tap = atras)`)
+      return
+    }
+    if (screen !== 'PICK') return
+  }
+
+  await gotoList(
+    contacts.length ? contacts.map(c => c.name) : ['(sin resultados)'],
+    tituloLista(),
+  )
 }
 
 async function toRead(): Promise<void> {
@@ -262,45 +349,42 @@ async function toRead(): Promise<void> {
   await voz
 }
 
-/** MANTENER presionado: recien aca se enciende el microfono. */
+// --- Voz --------------------------------------------------------------------
+/** MANTENER en READ: recien aca se enciende el microfono. */
 async function startListening(): Promise<void> {
   if (screen !== 'READ') return
   stopPolling()
   screen = 'DICTATE'
-  micOk = null; chunks = 0; bytes = 0; lastNote = ''
   await setText(dictateView(''))
-  if (!soniox) { try { await prepare() } catch { /* ya se mostro el error */ } }
-
-  // audioControl devuelve boolean. Ignorarlo fue el bug: la pantalla decia
-  // "Grabando" con el microfono apagado.
-  try {
-    micOk = await bridge.audioControl(true, AudioInputSource.Glasses)
-  } catch (err) {
-    micOk = false
-    lastNote = `audioControl: ${String(err).slice(0, 60)}`
-  }
+  await encenderMic()
   await setText(dictateView(''))
 }
 
-/** SOLTAR: se apaga el microfono y se pasa a confirmar. */
+/** SOLTAR en DICTATE: se apaga el microfono y se pasa a confirmar. */
 async function stopListening(): Promise<void> {
   if (screen !== 'DICTATE') return
-  lastReleaseAt = Date.now()
-  await bridge.audioControl(false)
-  soniox?.close()
-  soniox = null
+  await apagarMic()
   screen = 'CONFIRM'
   const cuerpo = draft.trim() || '(no se escuchó nada)'
   await gotoText(`Enviar a ${who()}:\n\n${cuerpo}\n\ntap = ENVIAR · doble = repetir`)
 }
 
-async function toPick(): Promise<void> {
-  stopPolling()
-  screen = 'PICK'
-  target = null
-  await bridge.audioControl(false)
-  soniox?.close(); soniox = null
-  await gotoList(contacts.map(c => c.name))
+/** MANTENER en PICK: dictar un nombre para filtrar la lista. */
+async function startSearch(): Promise<void> {
+  if (screen !== 'PICK') return
+  screen = 'SEARCH'
+  await gotoText(searchView(''))
+  await encenderMic()
+  await setText(searchView(''))
+}
+
+/** SOLTAR en SEARCH: se busca y se vuelve a la lista ya filtrada. */
+async function endSearch(): Promise<void> {
+  if (screen !== 'SEARCH') return
+  await apagarMic()
+  query = draft.trim()
+  draft = ''
+  await toPick()
 }
 
 async function doSend(): Promise<void> {
@@ -309,10 +393,10 @@ async function doSend(): Promise<void> {
   await setText(`Enviando a ${who()}...`)
   try {
     await sendMessage(target.id, draft.trim())
-    await setText(`Enviado ✓`)
+    await setText('Enviado ✓')
     draft = ''
     persist()
-    // Volver AL CHAT, no al menu: acabas de escribir, queres ver la respuesta.
+    // Volver AL CHAT, no al menu: acabas de escribir, quieres ver la respuesta.
     setTimeout(() => { toRead() }, 1200)
   } catch (err) {
     await setText(`FALLÓ el envío.\n${String(err)}\n\n(doble tap = volver)`)
@@ -323,9 +407,9 @@ async function doSend(): Promise<void> {
 
 // --- Arranque ---------------------------------------------------------------
 clockShown = hhmm()
-const ok = await bridge.createStartUpPageContainer(startUpWithText('VozGram\n\nCargando contactos...', clockShown))
+const ok = await bridge.createStartUpPageContainer(startUpWithText('VozGram\n\nCargando...', clockShown))
 if (ok !== 0) throw new Error(`createStartUpPageContainer fallo: ${ok}`)
-lastRendered = 'VozGram\n\nCargando contactos...'
+lastRendered = 'VozGram\n\nCargando...'
 mirror(lastRendered)
 
 draft = (await bridge.getLocalStorage(STORAGE_KEY)) || ''
@@ -334,11 +418,24 @@ draft = (await bridge.getLocalStorage(STORAGE_KEY)) || ''
 const clockTimer = setInterval(tickClock, CLOCK_MS)
 
 try {
-  contacts = (await getContacts()).contacts
-  if (contacts.length === 0) await setText('Sin chats disponibles.')
-  else await toPick()
+  // Si el backend no conoce /api/providers seguimos con la lista mezclada:
+  // preferimos una app que funcione de menos a una app que no arranque.
+  try {
+    providers = (await getProviders()).providers
+  } catch {
+    providers = []
+  }
+
+  if (providers.length > 1) {
+    await toApps()
+  } else {
+    // Un solo mensajero (o backend viejo): el menu de apps seria una lista de
+    // un elemento, o sea un paso regalado. Vamos directo a los chats.
+    provider = providers[0] ?? null
+    await toPick()
+  }
 } catch (err) {
-  await setText(`No se pudo hablar con el backend.\n${String(err)}`)
+  await gotoText(`No se pudo hablar con el backend.\n${String(err)}`)
 }
 
 // --- Eventos ----------------------------------------------------------------
@@ -348,13 +445,19 @@ const unsubscribe = bridge.onEvenHubEvent(event => {
     chunks++
     bytes += event.audioEvent.audioPcm.length
     soniox?.send(event.audioEvent.audioPcm)
-    if (screen === 'DICTATE' && chunks % 10 === 0) setText(dictateView(draft))
+    if ((screen === 'DICTATE' || screen === 'SEARCH') && chunks % 10 === 0) pintarVoz(draft)
     return
   }
 
-  if (event.listEvent && screen === 'PICK') {
-    target = contacts[event.listEvent.currentSelectItemIndex ?? 0] ?? null
-    if (target) toRead()
+  if (event.listEvent) {
+    const i = event.listEvent.currentSelectItemIndex ?? 0
+    if (screen === 'APPS') {
+      provider = providers[i] ?? null
+      if (provider) toPick()
+    } else if (screen === 'PICK') {
+      target = contacts[i] ?? null
+      if (target) toRead()
+    }
     return
   }
 
@@ -369,13 +472,30 @@ const unsubscribe = bridge.onEvenHubEvent(event => {
   if (!event.sysEvent) return
   const type = event.sysEvent.eventType ?? 0
 
-  if (type === OsEventTypeList.LONG_PRESS_EVENT) { note('Grabando...'); startListening(); return }
-  if (type === OsEventTypeList.LONG_PRESS_RELEASE_EVENT) { note('Revisa y confirma'); stopListening(); return }
+  if (type === OsEventTypeList.LONG_PRESS_EVENT) {
+    if (screen === 'PICK') { note('Di un nombre...'); startSearch() }
+    else { note('Grabando...'); startListening() }
+    return
+  }
+  if (type === OsEventTypeList.LONG_PRESS_RELEASE_EVENT) {
+    if (screen === 'SEARCH') { note('Buscando'); endSearch() }
+    else { note('Revisa y confirma'); stopListening() }
+    return
+  }
 
   if (type === OsEventTypeList.DOUBLE_CLICK_EVENT) {
-    if (screen === 'PICK') bridge.shutDownPageContainer(1)  // dialogo del sistema
-    else if (screen === 'CONFIRM') toRead()                 // repetir
-    else toPick()
+    if (screen === 'APPS') {
+      bridge.shutDownPageContainer(1)          // dialogo de salida del sistema
+    } else if (screen === 'PICK') {
+      // Atras en dos tiempos: primero se suelta la busqueda, despues se sale.
+      if (query) { query = ''; toPick() }
+      else if (pickEsRaiz()) bridge.shutDownPageContainer(1)
+      else toApps()
+    } else if (screen === 'CONFIRM') {
+      toRead()                                  // repetir el dictado
+    } else {
+      toPick(false)                             // desde READ: sin recargar
+    }
     return
   }
 

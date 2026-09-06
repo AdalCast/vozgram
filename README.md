@@ -34,10 +34,18 @@ y aceptado por tratarse de una app privada de un solo usuario.
 
 | Pantalla | Tap | Mantener | Soltar | Doble tap |
 |---|---|---|---|---|
-| **PICK** (raíz) | elegir chat | — | — | salir (diálogo del sistema) |
-| **READ** | — | responder | — | volver a PICK |
+| **APPS** (raíz) | elegir mensajero | — | — | salir (diálogo del sistema) |
+| **PICK** | elegir chat | buscar por voz | — | atrás |
+| **SEARCH** | — | — | buscar y filtrar | — |
+| **READ** | — | responder | — | volver a la lista |
 | **DICTATE** | — | — | terminar → CONFIRM | — |
 | **CONFIRM** | **ENVIAR** | — | — | repetir |
+
+Con un solo mensajero configurado, **APPS se salta**: un menú de un elemento es
+un paso regalado. En ese caso PICK vuelve a ser la raíz.
+
+El doble tap en PICK va hacia atrás en dos tiempos: primero suelta la búsqueda
+activa, y recién después sale a APPS.
 
 En **READ** se ven los últimos 10 mensajes; el swipe pagina. La vista se
 refresca sola cada 10 s respetando dónde va leyendo el usuario. El reloj está
@@ -216,7 +224,9 @@ Esto es lo que costó descubrir. Si vas a construir para los G2, léelo.
 - **Un solo contenedor por página puede capturar eventos.** Lista y texto no
   conviven; se cambia de página con `rebuildPageContainer`.
 - Si un contenedor declara `zOrderIndex`, **todos** los de esa página deben
-  declararlo, o falla con `MISSING_Z_ORDER_INDEX`.
+  declararlo (`MISSING_Z_ORDER_INDEX`) **y además ninguno puede repetirlo**
+  (`DUPLICATE_Z_ORDER_INDEX`). Dos contenedores con el mismo valor tumban la
+  página entera.
 - Los **swipes** llegan por `textEvent`; los **taps**, por `sysEvent`. Un
   `if (!event.sysEvent) return` prematuro descarta todos los eventos de audio.
 - `LONG_PRESS_EVENT = 9` y `LONG_PRESS_RELEASE_EVENT = 10` **sí existen** en el
