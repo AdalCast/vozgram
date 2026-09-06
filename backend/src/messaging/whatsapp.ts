@@ -5,6 +5,7 @@ import type { Contact, Msg, MessagingProvider } from './port'
 import type { ChatGuardado, MsgGuardado, ContactoGuardado } from './store'
 import {
   guardarChats, guardarMensajes, guardarContactos, listarChats, historial,
+  chatsSinNombre, nombreGuardado,
 } from './store'
 
 /**
@@ -161,10 +162,14 @@ async function abrir(): Promise<WASocket> {
   })
 
   s.ev.on('creds.update', saveCreds)
-  s.ev.on('messaging-history.set', ({ chats, contacts, messages }) => {
+  s.ev.on('messaging-history.set', ({ chats, contacts, messages, lidPnMappings }) => {
     volcarChats(chats)
     volcarContactos(contacts)
     volcarMensajes(messages)
+    // Las equivalencias entre identificador nuevo y telefono viajan aca.
+    if (lidPnMappings?.length) {
+      void s.signalRepository.lidMapping.storeLIDPNMappings(lidPnMappings).catch(() => {})
+    }
   })
   s.ev.on('contacts.upsert', volcarContactos)
   s.ev.on('contacts.update', volcarContactos)
@@ -178,6 +183,13 @@ async function abrir(): Promise<WASocket> {
     if (connection === 'open') {
       reintentos = 0
       console.log('[whatsapp] conectado')
+      // La agenda llega de a poco despues de conectar, asi que se le da tiempo
+      // antes de cruzarla. No es urgente: solo mejora los nombres.
+      setTimeout(() => {
+        vincularNombresLid()
+          .then(n => { if (n) console.log(`[whatsapp] ${n} chats nombrados via @lid`) })
+          .catch(() => {})
+      }, 45_000)
       return
     }
 
@@ -235,6 +247,33 @@ export async function resincronizarContactos(): Promise<void> {
     ['critical_block', 'critical_unblock_low', 'regular_high', 'regular_low', 'regular'],
     true,
   )
+}
+
+/**
+ * Cruza los chats sin nombre contra los contactos que llegaron identificados
+ * con @lid.
+ *
+ * WhatsApp esta migrando a un identificador nuevo (@lid) que NO expone el
+ * numero. La agenda llega casi toda con esa identidad, mientras que los chats
+ * siguen identificados por telefono (@s.whatsapp.net), asi que jamas coinciden
+ * por igualdad. El propio Baileys guarda la tabla de equivalencias; esto la
+ * consulta por lote y le pone el nombre al chat.
+ */
+export async function vincularNombresLid(): Promise<number> {
+  const pendientes = chatsSinNombre()
+  if (pendientes.length === 0) return 0
+
+  const s = await getSocket()
+  const mapas = await s.signalRepository.lidMapping.getLIDsForPNs(pendientes)
+  if (!mapas?.length) return 0
+
+  const filas: ContactoGuardado[] = []
+  for (const m of mapas) {
+    const nombre = nombreGuardado(m.lid)
+    if (nombre) filas.push({ id: m.pn, name: nombre })
+  }
+  guardarContactos(filas)
+  return filas.length
 }
 
 /**

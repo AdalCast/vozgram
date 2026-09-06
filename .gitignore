@@ -17,3 +17,8 @@ data/
 *.db
 *.db-wal
 *.db-shm
+
+# Agenda telefonica exportada. Son datos personales de TERCEROS: sus nombres y
+# sus numeros. No entra al repo ni por accidente.
+*.vcf
+*.vcard

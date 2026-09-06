@@ -205,6 +205,28 @@ export function listarChats(limit = 20, q?: string): Contact[] {
   return salida
 }
 
+/** Chats de personas que siguen sin nombre. */
+export function chatsSinNombre(): string[] {
+  const filas = conn()
+    .prepare(`
+      SELECT ch.id AS id
+      FROM chats ch
+      LEFT JOIN contacts co ON co.id = ch.id
+      WHERE ch.id LIKE '%@s.whatsapp.net'
+        AND (co.id IS NULL OR co.name = '')
+    `)
+    .all() as { id: string }[]
+  return filas.map(f => f.id)
+}
+
+/** Nombre guardado para un identificador cualquiera, si lo hay. */
+export function nombreGuardado(id: string): string | null {
+  const f = conn().prepare('SELECT name FROM contacts WHERE id = ?').get(id) as
+    | { name: string }
+    | undefined
+  return f?.name || null
+}
+
 /**
  * Ultimos mensajes de un chat en orden cronologico (el mas viejo primero),
  * que es lo que pide el contrato. Se piden los N mas nuevos y se invierten.
