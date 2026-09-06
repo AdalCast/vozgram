@@ -1,13 +1,22 @@
 # VozGram
 
-Dictar y enviar mensajes de **Telegram** desde unos lentes **Even Realities G2**,
-sin sacar el teléfono del bolsillo.
+Dictar y enviar mensajes de **Telegram y WhatsApp** desde unos lentes
+**Even Realities G2**, sin sacar el teléfono del bolsillo.
 
 Mantienes presionado el touchpad, hablas, sueltas, confirmas en el HUD y el
-mensaje sale. También puedes leer los últimos mensajes del chat en los lentes.
+mensaje sale. También lees la conversación en los lentes y buscas contactos
+dictando su nombre.
 
-> Proyecto personal, no afiliado ni respaldado por Even Realities ni por Telegram.
-> Usa la API oficial de Telegram (MTProto) con tu propia cuenta.
+Los dos mensajeros conviven en la misma app: eliges cuál al abrir, y cada chat
+se enruta solo a su servicio.
+
+> Proyecto personal. No está afiliado ni respaldado por Even Realities, Telegram
+> ni WhatsApp.
+>
+> Con Telegram usa **MTProto, la API oficial** para cuentas personales.
+> Con WhatsApp usa **Baileys, que NO es oficial**: va contra los términos de
+> servicio de WhatsApp y existe riesgo real de que baneen el número. Es una
+> decisión informada de quien lo instala, no un detalle menor.
 
 ## Cómo funciona
 
@@ -18,17 +27,21 @@ G2  --BLE-->  Teléfono (Even App, WebView)
                 |  3. texto ya transcrito  ------->  backend
                 v
           VPS con nginx + TLS
-            `-- GramJS (MTProto) --> tu cuenta de Telegram
+                |
+                +-- MessagingProvider (el contrato)
+                      |-- telegram.ts  --MTProto/GramJS-->  tu cuenta de Telegram
+                      `-- whatsapp.ts  --Baileys-------->   tu cuenta de WhatsApp
 ```
 
 **El audio nunca pasa por el backend**: el teléfono habla directo con Soniox
 usando una clave temporal de un solo uso que el backend acuña. Por el servidor
 solo circula texto.
 
-La clave madre de Soniox y el *session string* de Telegram viven **solo en el
-VPS**. El paquete `.ehpk` es extraíble una vez publicado: nunca metas secretos
-ahí. Lo único que viaja en el cliente es el `APP_SECRET` — un tradeoff conocido
-y aceptado por tratarse de una app privada de un solo usuario.
+Las credenciales —la clave madre de Soniox, el *session string* de Telegram y
+la sesión de WhatsApp— viven **solo en el VPS**. El paquete `.ehpk` es
+extraíble una vez publicado: nunca metas secretos ahí. Lo único que viaja en el
+cliente es el `APP_SECRET` — un tradeoff conocido y aceptado por tratarse de una
+app privada de un solo usuario.
 
 ## Cómo se ve
 
@@ -87,8 +100,14 @@ El micrófono se enciende **solo** mientras se mantiene presionado.
 
 - Unos Even Realities G2 y la Even App con una cuenta de desarrollador
 - Un servidor con dominio y TLS (el backend no debe exponerse sin HTTPS)
-- Una app de Telegram registrada en <https://my.telegram.org> (`api_id`, `api_hash`)
 - Una cuenta de [Soniox](https://soniox.com) para la transcripción en tiempo real
+- **Al menos un mensajero**, y con uno alcanza:
+  - **Telegram**: una app registrada en <https://my.telegram.org> (`api_id`, `api_hash`)
+  - **WhatsApp**: solo tu teléfono, para vincular el dispositivo. Lee antes las
+    advertencias de [la sección de WhatsApp](#whatsapp-opcional).
+
+Si configuras uno solo, la app se salta el menú de mensajeros y va directo a
+los chats.
 
 ## Puesta en marcha
 
