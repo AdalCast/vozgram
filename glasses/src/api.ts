@@ -1,7 +1,12 @@
 import { BACKEND_URL, APP_SECRET } from './config'
 
 export interface Contact { id: string; name: string }
-export interface Provider { id: string; label: string }
+/**
+ * `estado` es OPCIONAL: un backend viejo no lo manda y la app tiene que seguir
+ * funcionando igual. Ausente = se asume listo.
+ */
+export type EstadoMensajero = 'listo' | 'conectando' | 'desvinculado' | 'caido'
+export interface Provider { id: string; label: string; estado?: EstadoMensajero }
 /** `sender` solo viene en GRUPOS: en un chat de a dos, `out` ya lo dice todo. */
 export interface Msg { out: boolean; text: string; sender?: string }
 

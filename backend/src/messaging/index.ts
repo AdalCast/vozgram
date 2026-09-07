@@ -1,8 +1,8 @@
-import type { Contact, MessagingProvider } from './port'
+import type { Contact, MessagingProvider, EstadoMensajero } from './port'
 import { telegram } from './telegram'
 import { whatsapp } from './whatsapp'
 
-export type { Contact, Msg, MessagingProvider } from './port'
+export type { Contact, Msg, MessagingProvider, EstadoMensajero } from './port'
 
 /** Todos los mensajeros disponibles, indexados por su id. */
 const registro: Record<string, MessagingProvider> = {
@@ -104,9 +104,24 @@ export async function listarTodo(limitPorMensajero = 20, q?: string): Promise<Co
   return juntos.sort((a, b) => (b.updatedAt ?? 0) - (a.updatedAt ?? 0))
 }
 
-/** Mensajeros disponibles, para armar el menu de apps en los lentes. */
-export function mensajeros(): { id: string; label: string }[] {
-  return activos().map(p => ({ id: p.id, label: p.label }))
+/**
+ * Mensajeros disponibles, para armar el menu de apps en los lentes.
+ *
+ * Viaja tambien el estado: sin el, los lentes ofrecen entrar a un mensajero
+ * muerto y lo unico que recibe el usuario es un error sin explicacion. El
+ * servidor YA sabe que esta roto; esto es solamente contarlo.
+ *
+ * `estado` es un campo NUEVO: los .ehpk ya instalados lo ignoran y siguen
+ * funcionando igual. Agregar no rompe; quitar o renombrar si.
+ */
+export function mensajeros(): { id: string; label: string; estado: EstadoMensajero }[] {
+  return activos().map(p => ({
+    id: p.id,
+    label: p.label,
+    // Quien no reporta estado se asume listo. No sabemos que este mal, y
+    // adivinar que lo esta seria peor que callarse.
+    estado: p.estado?.() ?? 'listo',
+  }))
 }
 
 /**

@@ -1,7 +1,7 @@
 import { mkdirSync } from 'node:fs'
 // SOLO TIPOS: se borran al compilar, no cargan nada en tiempo de ejecucion.
 import type { WASocket, WAMessage, Chat } from 'baileys'
-import type { Contact, Msg, MessagingProvider } from './port'
+import type { Contact, Msg, MessagingProvider, EstadoMensajero } from './port'
 import type { ChatGuardado, MsgGuardado, ContactoGuardado } from './store'
 import {
   guardarChats, guardarMensajes, guardarContactos, listarChats, historial,
@@ -153,6 +153,12 @@ let sock: WASocket | null = null
 let conectando: Promise<WASocket> | null = null
 let reintentos = 0
 let vigilante: ReturnType<typeof setInterval> | null = null
+/**
+ * Lo que reportamos hacia afuera. Se actualiza en CADA transicion, no se
+ * deduce mirando el socket: un socket muerto y uno que todavia no nacio se ven
+ * igual desde afuera, y significan cosas opuestas.
+ */
+let estadoActual: EstadoMensajero = 'conectando'
 const MAX_REINTENTOS = 10
 const SALUD_MS = 60_000
 
@@ -169,6 +175,7 @@ async function abrir(): Promise<WASocket> {
   const { state, saveCreds } = await useMultiFileAuthState(AUTH_DIR)
 
   if (!state.creds.registered) {
+    estadoActual = 'desvinculado'
     throw new Error(
       'WhatsApp no esta vinculado. Corre `npm run login-whatsapp` una vez.',
     )
@@ -215,6 +222,7 @@ async function abrir(): Promise<WASocket> {
   s.ev.on('connection.update', ({ connection, lastDisconnect }) => {
     if (connection === 'open') {
       reintentos = 0
+      estadoActual = 'listo'
       console.log('[whatsapp] conectado')
       // La agenda llega de a poco despues de conectar, asi que se le da tiempo
       // antes de cruzarla. No es urgente: solo mejora los nombres.
@@ -234,6 +242,7 @@ async function abrir(): Promise<WASocket> {
     conectando = null
 
     if (codigo === DisconnectReason.loggedOut) {
+      estadoActual = 'desvinculado'
       console.error('[whatsapp] sesion cerrada desde el telefono: hay que vincular de nuevo')
       return
     }
@@ -245,10 +254,12 @@ async function abrir(): Promise<WASocket> {
     // El 515 (restartRequired) es NORMAL: WhatsApp cierra a proposito y espera
     // que el cliente vuelva a conectarse.
     if (reintentos >= MAX_REINTENTOS) {
+      estadoActual = 'caido'
       console.error(`[whatsapp] ${MAX_REINTENTOS} reconexiones fallidas seguidas; me detengo`)
       return
     }
     reintentos++
+    estadoActual = 'conectando'
     const espera = Math.min(3000 * reintentos, 30_000)
     console.warn(`[whatsapp] caida (${codigo ?? '?'}); reconectando en ${espera / 1000}s (${reintentos}/${MAX_REINTENTOS})`)
     setTimeout(() => { void getSocket().catch(() => {}) }, espera)
@@ -271,6 +282,7 @@ function vigilar(): void {
   vigilante = setInterval(() => {
     if (!sock || !sock.ws.isClosed) return
     console.warn('[whatsapp] el socket murio sin avisar; reconectando')
+    estadoActual = 'conectando'
     sock = null
     conectando = null
     void getSocket().catch(() => {})
@@ -383,4 +395,6 @@ export const whatsapp: MessagingProvider = {
     const s = await getSocket()
     await s.sendMessage(peer, { text })
   },
+
+  estado: () => estadoActual,
 }

@@ -33,6 +33,19 @@ export interface Msg {
   sender?: string
 }
 
+/**
+ * Estado de la conexion de un mensajero.
+ *
+ * Existe porque un mensajero puede estar roto de maneras DISTINTAS, y la
+ * diferencia le importa a quien trae los lentes puestos:
+ *   - 'desvinculado' solo lo arregla una persona, en el servidor. Esperar no
+ *     sirve de nada, asi que hay que decirlo.
+ *   - 'caido' se puede arreglar solo en la proxima reconexion. Conviene
+ *     esperar y no mandar a nadie a tocar el servidor de madrugada.
+ * Sin esta distincion las dos se ven igual: un error sin explicacion.
+ */
+export type EstadoMensajero = 'listo' | 'conectando' | 'desvinculado' | 'caido'
+
 export interface MessagingProvider {
   /** Identificador corto y estable. Sirve para elegir adaptador y para los logs. */
   readonly id: string
@@ -51,4 +64,14 @@ export interface MessagingProvider {
   getHistory(peer: string, limit?: number): Promise<Msg[]>
 
   sendMessage(peer: string, text: string): Promise<void>
+
+  /**
+   * Estado de la conexion, SIN abrirla ni tocar la red.
+   *
+   * OPCIONAL a proposito: un mensajero que se conecta por pedido -- como
+   * Telegram -- no tiene un estado que reportar entre una llamada y la
+   * siguiente. Obligarlo a inventar uno seria peor que no preguntar, asi que
+   * quien no lo implemente se asume listo.
+   */
+  estado?(): EstadoMensajero
 }

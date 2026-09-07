@@ -15,6 +15,7 @@ import { TEXT_ID, TEXT_NAME, CLOCK_ID, CLOCK_NAME, startUpWithText, rebuildWithT
 // VozGram — push-to-talk, dos mensajeros.
 //
 //   APPS    lista   tap = elegir app          doble = salir (sistema)
+//   INFO    texto   (mensajero no disponible) doble = volver a APPS
 //   PICK    lista   tap = elegir chat         doble = atras
 //                   MANTENER = buscar por voz
 //   SEARCH  texto   SOLTAR = buscar
@@ -26,7 +27,7 @@ import { TEXT_ID, TEXT_NAME, CLOCK_ID, CLOCK_NAME, startUpWithText, rebuildWithT
 // El microfono SOLO se enciende mientras se mantiene presionado. Nunca escucha solo.
 // ---------------------------------------------------------------------------
 
-type Screen = 'APPS' | 'PICK' | 'SEARCH' | 'READ' | 'DICTATE' | 'CONFIRM'
+type Screen = 'APPS' | 'INFO' | 'PICK' | 'SEARCH' | 'READ' | 'DICTATE' | 'CONFIRM'
 
 const STORAGE_KEY = 'vozgram.draft'
 const MAX_VISIBLE = 400
@@ -166,6 +167,54 @@ const tituloLista = () => {
 /** PICK es la raiz solo cuando no hay menu de apps que mostrar. */
 const pickEsRaiz = () => providers.length <= 1
 
+/**
+ * Sufijo del menu cuando un mensajero NO esta listo.
+ *
+ * Corto a proposito: comparte renglon con el nombre y la pantalla mide 576 px.
+ * Vale mas un aviso de una palabra que se lee de reojo caminando, que una
+ * frase completa que obliga a detenerse.
+ */
+const AVISO: Record<string, string> = {
+  desvinculado: 'sin vincular',
+  conectando: 'conectando',
+  caido: 'sin conexion',
+}
+
+const etiqueta = (p: Provider): string => {
+  const a = p.estado && p.estado !== 'listo' ? AVISO[p.estado] : ''
+  return a ? `${p.label} (${a})` : p.label
+}
+
+/**
+ * Se puede entrar? 'conectando' SI: los chats salen del almacen del servidor y
+ * la llamada espera sola a que el socket abra. Bloquear ahi seria negarle al
+ * usuario algo que si funciona.
+ */
+const entrable = (p: Provider): boolean =>
+  !p.estado || p.estado === 'listo' || p.estado === 'conectando'
+
+/** Que hacer, dicho en los lentes, porque en los lentes no hay consola. */
+function explicar(p: Provider): string {
+  if (p.estado === 'desvinculado') {
+    return [
+      `${p.label.toUpperCase()} SIN VINCULAR`,
+      '',
+      'Se cerro la sesion desde el telefono.',
+      'Hay que vincular de nuevo en el servidor.',
+      '',
+      'Doble tap para volver',
+    ].join('\n')
+  }
+  return [
+    `${p.label.toUpperCase()} SIN CONEXION`,
+    '',
+    'El servidor no logro reconectar.',
+    'Se reintenta solo; vuelve a probar en un rato.',
+    '',
+    'Doble tap para volver',
+  ].join('\n')
+}
+
 /** Cuantos renglones ocupa realmente un mensaje al renderizarse. */
 const renglones = (t: string) => Math.max(1, Math.ceil(t.length / CHARS_PER_LINE))
 
@@ -298,7 +347,7 @@ async function toApps(): Promise<void> {
   screen = 'APPS'
   target = null; provider = null; query = ''
   await apagarMic()
-  await gotoList(providers.map(p => p.label), 'VozGram')
+  await gotoList(providers.map(etiqueta), 'VozGram')
 }
 
 /**
@@ -452,8 +501,18 @@ const unsubscribe = bridge.onEvenHubEvent(event => {
   if (event.listEvent) {
     const i = event.listEvent.currentSelectItemIndex ?? 0
     if (screen === 'APPS') {
-      provider = providers[i] ?? null
-      if (provider) toPick()
+      const elegido = providers[i] ?? null
+      if (!elegido) return
+      // Un mensajero roto no se esconde de la lista: sigue ahi, con su motivo.
+      // Desaparecerlo dejaria al usuario preguntandose si borro la app.
+      if (!entrable(elegido)) {
+        provider = elegido
+        screen = 'INFO'
+        void gotoText(explicar(elegido))
+        return
+      }
+      provider = elegido
+      toPick()
     } else if (screen === 'PICK') {
       target = contacts[i] ?? null
       if (target) toRead()
@@ -486,6 +545,8 @@ const unsubscribe = bridge.onEvenHubEvent(event => {
   if (type === OsEventTypeList.DOUBLE_CLICK_EVENT) {
     if (screen === 'APPS') {
       bridge.shutDownPageContainer(1)          // dialogo de salida del sistema
+    } else if (screen === 'INFO') {
+      toApps()
     } else if (screen === 'PICK') {
       // Atras en dos tiempos: primero se suelta la busqueda, despues se sale.
       if (query) { query = ''; toPick() }
