@@ -5,7 +5,7 @@ import type { Contact, Msg, MessagingProvider, EstadoMensajero } from './port'
 import type { ChatGuardado, MsgGuardado, ContactoGuardado } from './store'
 import {
   guardarChats, guardarMensajes, guardarContactos, listarChats, historial,
-  chatsSinNombre, nombreGuardado,
+  chatsSinNombre, nombreGuardado, guardarLidMap, chatsLid,
 } from './store'
 
 /**
@@ -198,6 +198,9 @@ async function abrir(): Promise<WASocket> {
     volcarMensajes(messages)
     // Las equivalencias entre identificador nuevo y telefono viajan aca.
     if (lidPnMappings?.length) {
+      // Tambien en NUESTRA base: Baileys lo guarda para cifrar, nosotros lo
+      // necesitamos para no mostrar a la misma persona dos veces.
+      guardarLidMap(lidPnMappings)
       void s.signalRepository.lidMapping.storeLIDPNMappings(lidPnMappings).catch(() => {})
     }
   })
@@ -229,6 +232,9 @@ async function abrir(): Promise<WASocket> {
       setTimeout(() => {
         vincularNombresLid()
           .then(n => { if (n) console.log(`[whatsapp] ${n} chats nombrados via @lid`) })
+          .catch(() => {})
+        mapearLids()
+          .then(n => { if (n) console.log(`[whatsapp] ${n} identidades @lid unificadas`) })
           .catch(() => {})
       }, 45_000)
       return
@@ -352,6 +358,7 @@ export async function vincularNombresLid(): Promise<number> {
   const porTelefono = pendientes.filter(j => j.endsWith('@s.whatsapp.net'))
   if (porTelefono.length) {
     const mapas = await s.signalRepository.lidMapping.getLIDsForPNs(porTelefono)
+    if (mapas?.length) guardarLidMap(mapas)
     for (const m of mapas ?? []) {
       const nombre = nombreGuardado(m.lid)
       if (nombre) filas.push({ id: m.pn, name: nombre })
@@ -362,12 +369,31 @@ export async function vincularNombresLid(): Promise<number> {
   for (const lid of pendientes.filter(j => j.endsWith('@lid'))) {
     const pn = await s.signalRepository.lidMapping.getPNForLID(lid).catch(() => null)
     if (!pn) continue
+    guardarLidMap([{ lid, pn }])
     const nombre = nombreGuardado(pn)
     if (nombre) filas.push({ id: lid, name: nombre })
   }
 
   guardarContactos(filas)
   return filas.length
+}
+
+/**
+ * Aprende la equivalencia de los chats @lid que aun no la tienen.
+ *
+ * Hace falta APARTE de vincularNombresLid porque aquel solo mira los chats SIN
+ * nombre -- su trabajo es ponerles uno. Los duplicados que molestan en la lista
+ * son justo los contrarios: los que YA tienen nombre y aparecen dos veces.
+ * Se resuelven por lote; uno por uno serian cientos de idas y vueltas.
+ */
+export async function mapearLids(): Promise<number> {
+  const lids = chatsLid()
+  if (lids.length === 0) return 0
+  const s = await getSocket()
+  const mapas = await s.signalRepository.lidMapping.getPNsForLIDs(lids)
+  if (!mapas?.length) return 0
+  guardarLidMap(mapas)
+  return mapas.length
 }
 
 /**

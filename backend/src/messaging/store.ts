@@ -45,6 +45,16 @@ function conn(): DatabaseSync {
       id   TEXT PRIMARY KEY,
       name TEXT NOT NULL
     );
+    -- Los DOS identificadores de una misma persona. WhatsApp esta migrando de
+    -- "telefono@s.whatsapp.net" a "id@lid", que no expone el numero, y durante
+    -- la transicion CONVIVEN los dos. Sin esta tabla el mismo contacto sale dos
+    -- veces en la lista y con la conversacion partida por la mitad: abres una y
+    -- ves lo viejo, abres la otra y ves lo de hoy.
+    CREATE TABLE IF NOT EXISTS lid_map (
+      lid TEXT PRIMARY KEY,
+      pn  TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_lidmap_pn ON lid_map(pn);
   `)
 
   // MIGRACION. `CREATE TABLE IF NOT EXISTS` no toca una tabla que ya existe,
@@ -88,6 +98,64 @@ export function guardarContactos(cs: ContactoGuardado[]): void {
     c.exec('ROLLBACK')
     throw err
   }
+}
+
+/** Guarda equivalencias @lid <-> telefono. */
+export function guardarLidMap(pares: { lid: string; pn: string }[]): void {
+  const utiles = pares.filter(p => p.lid && p.pn)
+  if (utiles.length === 0) return
+  const c = conn()
+  const stmt = c.prepare(`
+    INSERT INTO lid_map (lid, pn) VALUES (?, ?)
+    ON CONFLICT(lid) DO UPDATE SET pn = excluded.pn
+  `)
+  c.exec('BEGIN')
+  try {
+    for (const x of utiles) stmt.run(x.lid, x.pn)
+    c.exec('COMMIT')
+  } catch (err) {
+    c.exec('ROLLBACK')
+    throw err
+  }
+}
+
+/**
+ * Todos los identificadores que apuntan a la misma persona, incluido el que se
+ * pregunta. Un grupo (@g.us) no tiene doble identidad y vuelve solo.
+ */
+export function equivalentes(id: string): string[] {
+  const c = conn()
+  const out = new Set([id])
+  if (id.endsWith('@lid')) {
+    const f = c.prepare('SELECT pn FROM lid_map WHERE lid = ?').get(id) as
+      | { pn: string } | undefined
+    if (f?.pn) out.add(f.pn)
+  } else if (id.endsWith('@s.whatsapp.net')) {
+    const filas = c.prepare('SELECT lid FROM lid_map WHERE pn = ?').all(id) as
+      { lid: string }[]
+    for (const f of filas) out.add(f.lid)
+  }
+  return [...out]
+}
+
+/**
+ * Chats @lid cuya equivalencia todavia no conocemos.
+ *
+ * Ojo con la diferencia respecto de chatsSinNombre(): aquel busca los que NO
+ * tienen nombre, porque su trabajo es ponerles uno. Este busca los que faltan
+ * de MAPEAR, tengan nombre o no -- y los duplicados que se ven en la lista son
+ * justamente los que si tienen nombre.
+ */
+export function chatsLid(): string[] {
+  const filas = conn()
+    .prepare(`
+      SELECT ch.id AS id
+      FROM chats ch
+      LEFT JOIN lid_map lm ON lm.lid = ch.id
+      WHERE ch.id LIKE '%@lid' AND lm.lid IS NULL
+    `)
+    .all() as { id: string }[]
+  return filas.map(f => f.id)
 }
 
 export interface MsgGuardado {
@@ -178,20 +246,40 @@ export function listarChats(limit = 20, q?: string): Contact[] {
   // Al buscar se traen TODOS los chats y se filtra en JS: son un par de cientos
   // de filas, y SQLite no sabe comparar sin acentos. Hacerlo aca es correcto y
   // mas barato que ensuciar el esquema con una columna normalizada.
-  const tope = q ? 5000 : limit
+  // Se traen TODOS los chats, no solo `limit`. Al colapsar las dos identidades
+  // de una persona en una sola fila, un LIMIT en SQL devolveria MENOS
+  // elementos de los pedidos. Son unos cientos de filas: el costo es
+  // irrelevante y el resultado, correcto.
   const filas = conn()
     .prepare(`
       SELECT ch.id AS id,
              COALESCE(NULLIF(ch.name, ''), NULLIF(co.name, ''), ch.id) AS name,
-             ch.updated_at AS updatedAt
+             ch.updated_at AS updatedAt,
+             COALESCE(lm.pn, ch.id) AS grupo
       FROM chats ch
       LEFT JOIN contacts co ON co.id = ch.id
+      LEFT JOIN lid_map  lm ON lm.lid = ch.id
       ORDER BY ch.updated_at DESC
-      LIMIT ?
     `)
-    .all(tope) as { id: string; name: string; updatedAt: number }[]
+    .all() as { id: string; name: string; updatedAt: number; grupo: string }[]
 
-  let salida = filas.map(f => ({
+  // Colapsa las identidades duplicadas. Vienen ordenadas de mas reciente a mas
+  // vieja, asi que la PRIMERA de cada grupo es la conversacion viva: ese es el
+  // id que se devuelve, para que abrirla lleve a los mensajes de hoy y no a los
+  // del ano pasado.
+  const porGrupo = new Map<string, { id: string; name: string; updatedAt: number }>()
+  for (const f of filas) {
+    const ya = porGrupo.get(f.grupo)
+    if (!ya) {
+      porGrupo.set(f.grupo, { id: f.id, name: f.name, updatedAt: f.updatedAt })
+      continue
+    }
+    // El nombre puede estar en la identidad vieja y faltar en la nueva. Se toma
+    // el mejor de las dos sin mover ni el id ni la fecha.
+    if (ya.name === ya.id && f.name !== f.id) ya.name = f.name
+  }
+
+  let salida = [...porGrupo.values()].map(f => ({
     id: f.id,
     // Si la cascada del SQL terminó cayendo en el id, lo volvemos legible.
     name: f.name === f.id ? numeroLegible(f.id) : f.name,
@@ -201,11 +289,9 @@ export function listarChats(limit = 20, q?: string): Contact[] {
   if (q) {
     const aguja = normalizar(q)
     // Tambien se busca en el id: sirve para llegar por numero de telefono.
-    salida = salida
-      .filter(c => normalizar(c.name).includes(aguja) || c.id.includes(aguja))
-      .slice(0, limit)
+    salida = salida.filter(c => normalizar(c.name).includes(aguja) || c.id.includes(aguja))
   }
-  return salida
+  return salida.slice(0, limit)
 }
 
 /** Chats de personas que siguen sin nombre. */
@@ -235,9 +321,16 @@ export function nombreGuardado(id: string): string | null {
  * que es lo que pide el contrato. Se piden los N mas nuevos y se invierten.
  */
 export function historial(chatId: string, limit = 10): Msg[] {
+  // La conversacion puede estar PARTIDA entre las dos identidades de la misma
+  // persona. Se leen todas juntas, o abrir un chat muestra solo la mitad -- que
+  // es exactamente el sintoma que se reporto: una entrada con lo viejo y otra
+  // con lo reciente.
+  const ids = equivalentes(chatId)
+  const marcas = ids.map(() => '?').join(', ')
   const filas = conn()
-    .prepare('SELECT out, text, sender FROM messages WHERE chat_id = ? ORDER BY ts DESC LIMIT ?')
-    .all(chatId, limit) as { out: number; text: string; sender: string | null }[]
+    .prepare(`SELECT out, text, sender FROM messages
+              WHERE chat_id IN (${marcas}) ORDER BY ts DESC LIMIT ?`)
+    .all(...ids, limit) as { out: number; text: string; sender: string | null }[]
   return filas
     .map(f => ({
       out: f.out === 1,
