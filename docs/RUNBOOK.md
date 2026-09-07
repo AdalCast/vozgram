@@ -5,6 +5,9 @@ cualquiera —persona o agente— sin haber estado presente cuando pasó.
 
 **Servidor**: VPS, `/opt/vozgram`. Servicio `vozgram.service`.
 **NO es un repositorio git**: el código se copia a mano con `scp`.
+El código fuente vive en https://github.com/AdalCast/vozgram
+
+Copia viva en el servidor: `/opt/vozgram/RUNBOOK.md`.
 
 ---
 
@@ -20,6 +23,28 @@ cualquiera —persona o agente— sin haber estado presente cuando pasó.
    sufijo de fecha. Si el arreglo sale mal, hay de dónde volver.
 4. **Mide el resultado, no confíes en que el deploy salió bien.** Un cambio
    puede desplegarse limpio y no hacer nada. Ver «Verificar» en cada sección.
+
+---
+
+## Qué es esto y cómo está armado
+
+Backend de VozGram: dicta y envía mensajes de Telegram y WhatsApp desde unos
+lentes Even Realities G2. Corre detrás de nginx.
+
+```
+src/server.ts             endpoints; NO conoce Telegram ni WhatsApp
+src/messaging/port.ts     el contrato que cumplen los mensajeros
+src/messaging/index.ts    enruta cada peer a su adaptador
+src/messaging/telegram.ts MTProto — pregunta y recibe respuesta
+src/messaging/whatsapp.ts Baileys — solo escucha lo que llega
+src/messaging/store.ts    SQLite; existe porque a WhatsApp NO se le puede
+                          preguntar por el historial
+data/wa-auth/             sesión de WhatsApp   (crítica)
+data/whatsapp.db          chats y mensajes     (no se recupera si se pierde)
+```
+
+Corre con `npx tsx`: **no hay paso de compilación**, el archivo copiado es el
+que se ejecuta.
 
 ---
 
