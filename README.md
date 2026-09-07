@@ -20,6 +20,9 @@ se enruta solo a su servicio.
 
 > **¿Cómo está armado por dentro?** Dependencias, diagramas de flujo y las
 > decisiones detrás de cada pieza: **[docs/ARQUITECTURA.md](docs/ARQUITECTURA.md)**
+>
+> **¿Se rompió algo en el servidor?** Diagnóstico y procedimiento para cada
+> falla conocida: **[docs/RUNBOOK.md](docs/RUNBOOK.md)**
 
 ## Cómo funciona
 
