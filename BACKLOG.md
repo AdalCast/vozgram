@@ -35,6 +35,15 @@ Esto queda parkeado para cuando se quiera abrir a mas gente.
 
 ## Pendiente — ideas sin priorizar
 
+- [ ] **Unificar chats duplicados por `@lid`.** Tras revincular WhatsApp
+      (2026-09-07) quedaron 265 chats: 130 por telefono, 69 por `@lid`, 66
+      grupos. Diez nombres aparecen repetidos y en cuatro casos es la MISMA
+      persona con sus dos identificadores. Baileys ya guarda la equivalencia
+      (`signalRepository.lidMapping`), que es lo que usa `vincularNombresLid`;
+      faltaria colapsar las dos filas en una al listar, quedandose con la de
+      actividad mas reciente. Molesta poco pero se ve feo justo arriba de la
+      lista, que es donde caen los chats activos. BAJO.
+
 - [ ] Traer mas de 10 mensajes / cargar mas al llegar al principio
 - [ ] Buscar contacto (la lista crece y el orden cambia por actividad)
 - [ ] Respuestas rapidas predefinidas (si/no/ahi voy) sin dictar
