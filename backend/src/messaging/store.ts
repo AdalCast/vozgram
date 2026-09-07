@@ -100,7 +100,24 @@ export function guardarContactos(cs: ContactoGuardado[]): void {
   }
 }
 
-/** Guarda equivalencias @lid <-> telefono. */
+/**
+ * Quita el sufijo de dispositivo de un JID.
+ *
+ *   5216648093730:0@s.whatsapp.net  ->  5216648093730@s.whatsapp.net
+ *
+ * Baileys devuelve el telefono CON el dispositivo pegado, pero los chats se
+ * guardan sin el. Comparar sin normalizar no encuentra nada -- y no falla:
+ * simplemente no une nada, que es peor, porque no se nota.
+ */
+export function jidBase(jid: string): string {
+  const i = jid.indexOf('@')
+  if (i < 0) return jid
+  const usuario = jid.slice(0, i)
+  const dosPuntos = usuario.indexOf(':')
+  return dosPuntos < 0 ? jid : `${usuario.slice(0, dosPuntos)}${jid.slice(i)}`
+}
+
+/** Guarda equivalencias @lid <-> telefono, siempre en su forma base. */
 export function guardarLidMap(pares: { lid: string; pn: string }[]): void {
   const utiles = pares.filter(p => p.lid && p.pn)
   if (utiles.length === 0) return
@@ -111,7 +128,7 @@ export function guardarLidMap(pares: { lid: string; pn: string }[]): void {
   `)
   c.exec('BEGIN')
   try {
-    for (const x of utiles) stmt.run(x.lid, x.pn)
+    for (const x of utiles) stmt.run(jidBase(x.lid), jidBase(x.pn))
     c.exec('COMMIT')
   } catch (err) {
     c.exec('ROLLBACK')
@@ -123,9 +140,10 @@ export function guardarLidMap(pares: { lid: string; pn: string }[]): void {
  * Todos los identificadores que apuntan a la misma persona, incluido el que se
  * pregunta. Un grupo (@g.us) no tiene doble identidad y vuelve solo.
  */
-export function equivalentes(id: string): string[] {
+export function equivalentes(idCrudo: string): string[] {
   const c = conn()
-  const out = new Set([id])
+  const id = jidBase(idCrudo)
+  const out = new Set([idCrudo, id])
   if (id.endsWith('@lid')) {
     const f = c.prepare('SELECT pn FROM lid_map WHERE lid = ?').get(id) as
       | { pn: string } | undefined
