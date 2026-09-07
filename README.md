@@ -197,7 +197,10 @@ npx evenhub qr --url http://<tu-ip>:5173      # sideload al G2 real
 ```
 
 El dominio del backend también debe ir en el `whitelist` de `app.json`, o el
-runtime bloquea la conexión en el hardware real.
+runtime bloquea la conexión en el hardware real. En este repositorio ese campo
+lleva un **placeholder** (`https://TU-SERVIDOR.example.org`) a propósito: el
+dominio real se inyecta al empaquetar, desde `glasses/.env`. Ver
+[Empaquetado](#empaquetado).
 
 ### Entorno de pruebas completo
 
@@ -218,8 +221,20 @@ npx vite --mode production --port 5173 --force
 
 ```bash
 cd glasses
+./pack.sh
+```
+
+`pack.sh` compila y empaqueta en un paso, y **sustituye el placeholder del
+`whitelist` por el dominio real** que tengas en `glasses/.env`. El manifiesto
+versionado nunca nombra tu servidor: el dominio no es un secreto criptográfico,
+pero sí es un puntero que enlaza tu repositorio con tu máquina.
+
+Si prefieres hacerlo a mano, edita el `whitelist` antes de empaquetar y no
+lo commitees:
+
+```bash
 npx vite build
-npx evenhub pack app.json dist -o vozgram-0.9.0.ehpk
+npx evenhub pack app.json dist -o vozgram-0.10.0.ehpk
 ```
 
 - `min_app_version` debe ser **2.2.9** (piso que impone el SDK 0.0.14). La
