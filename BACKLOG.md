@@ -31,7 +31,7 @@ Esto queda parkeado para cuando se quiera abrir a mas gente.
       hace falta un .ehpk por persona y el modelo compartido se cae.
       El empaquetador acepta cualquier string (ni siquiera valida), asi que solo
       se sabe probando en hardware real: armar un build con whitelist
-      `https://*.duckdns.org` SIN el dominio exacto y ver si sigue funcionando.
+      `https://*.tu-dominio.org` SIN el dominio exacto y ver si sigue funcionando.
 
 ## Pendiente — ideas sin priorizar
 
