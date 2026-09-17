@@ -1,6 +1,7 @@
 import { BACKEND_URL, APP_SECRET } from './config'
 
-export interface Contact { id: string; name: string }
+/** `kind` lo decide el adaptador: en los lentes no hay forma de deducirlo. */
+export interface Contact { id: string; name: string; kind?: 'persona' | 'grupo' }
 /**
  * `estado` es OPCIONAL: un backend viejo no lo manda y la app tiene que seguir
  * funcionando igual. Ausente = se asume listo.

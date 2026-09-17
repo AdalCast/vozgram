@@ -1,7 +1,7 @@
 import { TelegramClient } from 'telegram'
 import { StringSession } from 'telegram/sessions'
 import type { Contact, Msg, MessagingProvider } from './port'
-import { normalizar } from './texto'
+import { normalizar, soloLegible } from './texto'
 
 /** Nombre para mostrar de una entidad de Telegram (persona, grupo o canal). */
 function nombreDe(e: unknown): string {
@@ -44,7 +44,14 @@ export const telegram: MessagingProvider = {
     const dialogs = await c.getDialogs({ limit: q ? 200 : limit })
     let salida = dialogs
       .filter(d => d.isUser || d.isGroup)
-      .map(d => ({ id: String(d.id), name: d.title ?? 'sin nombre', updatedAt: d.date }))
+      .map(d => ({
+        id: String(d.id),
+        // Mismo filtro que en WhatsApp: un titulo con emoji deja cajitas, y
+        // uno que es solo emoji deja el renglon mudo.
+        name: soloLegible(d.title ?? '') || 'sin nombre',
+        updatedAt: d.date,
+        kind: d.isGroup ? ('grupo' as const) : ('persona' as const),
+      }))
     if (q) {
       const aguja = normalizar(q)
       salida = salida.filter(x => normalizar(x.name).includes(aguja)).slice(0, limit)

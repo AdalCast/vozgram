@@ -15,6 +15,24 @@
  * Se aplica igual al texto y a la aguja, asi que la comparacion sigue siendo
  * simetrica: quitarla de un solo lado si romperia.
  */
+/**
+ * Deja solo lo que la fuente del firmware sabe dibujar.
+ *
+ * Los emoji salen como una cajita vacia o directamente en blanco -- verificado
+ * en el simulador: un grupo llamado "🏳‍🌈 Toxicos 👑" se veia "Toxicos []", y
+ * un chat cuyo nombre entero era "💤💤" dejaba el renglon MUDO: ocupaba lugar
+ * en la lista y no se podia saber de quien era.
+ *
+ * Devuelve cadena vacia si no queda nada legible. Quien llama decide con que
+ * rellenar, porque solo el sabe si tiene un telefono a mano.
+ */
+export function soloLegible(t: string): string {
+  return t
+    .replace(/[^\p{Script=Latin}\p{N}\p{P}\p{Zs}+]/gu, '')
+    .replace(/\s+/g, ' ')
+    .trim()
+}
+
 export function normalizar(t: string): string {
   return t
     .normalize('NFD')

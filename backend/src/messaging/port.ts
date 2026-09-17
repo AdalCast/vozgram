@@ -19,6 +19,14 @@ export interface Contact {
    * su lista bien ordenada pero no hay forma de intercalarlas con sentido.
    */
   updatedAt?: number
+
+  /**
+   * Persona o grupo. Lo sabe el ADAPTADOR y nadie mas: en WhatsApp se deduce
+   * del identificador, en Telegram lo dice la API, y en los lentes no hay
+   * forma de averiguarlo. Sin esto, la pantalla no puede avisar si estas a
+   * punto de escribirle a una persona o a diez.
+   */
+  kind?: 'persona' | 'grupo'
 }
 
 export interface Msg {

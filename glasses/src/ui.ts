@@ -107,6 +107,11 @@ export function listPage(names: string[]): ListContainerProperty {
       itemCount: names.length,
       itemName: names,
       isItemSelectBorderEn: 1,
+      // Sin esto el recuadro de seleccion se ajusta al LARGO DEL TEXTO, y se
+      // lee como "esta palabra esta en una caja" en vez de "esta fila esta
+      // seleccionada". A lo ancho del contenedor menos el padding de los dos
+      // lados.
+      itemWidth: SCREEN_W - 16,
     }),
   })
 }

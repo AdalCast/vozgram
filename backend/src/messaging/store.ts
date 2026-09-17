@@ -2,7 +2,7 @@ import { DatabaseSync } from 'node:sqlite'
 import { mkdirSync } from 'node:fs'
 import { dirname } from 'node:path'
 import type { Contact, Msg } from './port'
-import { normalizar } from './texto'
+import { normalizar, soloLegible } from './texto'
 
 /**
  * Almacen para mensajeros que NO permiten consultar historial.
@@ -343,15 +343,23 @@ export function listarChats(limit = 20, q?: string): Contact[] {
     if (ya.name === ya.id && f.name !== f.id) ya.name = f.name
   }
 
-  let salida = [...porGrupo.values()].map(f => ({
-    id: f.id,
+  let salida = [...porGrupo.values()].map(f => {
     // Si la cascada del SQL terminó cayendo en el id, lo volvemos legible.
     // Se usa el GRUPO, no el id: para un @lid cuyo telefono ya conocemos, el
     // grupo ES ese telefono. Un numero bien formateado se reconoce; "Contacto
     // sin nombre" repetido doce veces en la lista no distingue a nadie.
-    name: f.name === f.id ? numeroLegible(f.grupo) : f.name,
-    updatedAt: f.updatedAt,
-  }))
+    const crudo = f.name === f.id ? numeroLegible(f.grupo) : f.name
+    // Quitados los glifos que el firmware no dibuja, un nombre puede quedar
+    // VACIO -- pasa con los que son puro emoji. Ahi se cae al telefono, que
+    // aqui si lo tenemos.
+    const limpio = soloLegible(crudo)
+    return {
+      id: f.id,
+      name: limpio || numeroLegible(f.grupo),
+      updatedAt: f.updatedAt,
+      kind: f.id.endsWith('@g.us') ? ('grupo' as const) : ('persona' as const),
+    }
+  })
 
   if (q) {
     const aguja = normalizar(q)

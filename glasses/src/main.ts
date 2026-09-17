@@ -179,6 +179,18 @@ const tituloLista = () => {
     : `${app} · mantén tap busca`
 }
 
+/**
+ * Marcador de tipo delante del nombre: relleno es grupo, hueco es persona.
+ *
+ * Los dos glifos existen en la fuente del firmware y MIDEN LO MISMO, asi que la
+ * columna queda a plomo en los dos estados -- con figuras de ancho distinto se
+ * descuadra, porque la fuente es proporcional.
+ *
+ * Sirve para no equivocarse de destinatario: mandar a un grupo lo que era para
+ * una persona no tiene deshacer.
+ */
+const marcar = (c: Contact): string => `${c.kind === 'grupo' ? '●' : '○'} ${c.name}`
+
 /** PICK es la raiz solo cuando no hay menu de apps que mostrar. */
 const pickEsRaiz = () => providers.length <= 1
 
@@ -387,7 +399,7 @@ async function toPick(recargar = true): Promise<void> {
   }
 
   await gotoList(
-    contacts.length ? contacts.map(c => c.name) : ['(sin resultados)'],
+    contacts.length ? contacts.map(marcar) : ['(sin resultados)'],
     tituloLista(),
   )
 }
