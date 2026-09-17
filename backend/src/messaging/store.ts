@@ -285,11 +285,11 @@ export function listarChats(limit = 20, q?: string): Contact[] {
   // vieja, asi que la PRIMERA de cada grupo es la conversacion viva: ese es el
   // id que se devuelve, para que abrirla lleve a los mensajes de hoy y no a los
   // del ano pasado.
-  const porGrupo = new Map<string, { id: string; name: string; updatedAt: number }>()
+  const porGrupo = new Map<string, { id: string; name: string; updatedAt: number; grupo: string }>()
   for (const f of filas) {
     const ya = porGrupo.get(f.grupo)
     if (!ya) {
-      porGrupo.set(f.grupo, { id: f.id, name: f.name, updatedAt: f.updatedAt })
+      porGrupo.set(f.grupo, { id: f.id, name: f.name, updatedAt: f.updatedAt, grupo: f.grupo })
       continue
     }
     // El nombre puede estar en la identidad vieja y faltar en la nueva. Se toma
@@ -300,7 +300,10 @@ export function listarChats(limit = 20, q?: string): Contact[] {
   let salida = [...porGrupo.values()].map(f => ({
     id: f.id,
     // Si la cascada del SQL terminó cayendo en el id, lo volvemos legible.
-    name: f.name === f.id ? numeroLegible(f.id) : f.name,
+    // Se usa el GRUPO, no el id: para un @lid cuyo telefono ya conocemos, el
+    // grupo ES ese telefono. Un numero bien formateado se reconoce; "Contacto
+    // sin nombre" repetido doce veces en la lista no distingue a nadie.
+    name: f.name === f.id ? numeroLegible(f.grupo) : f.name,
     updatedAt: f.updatedAt,
   }))
 
