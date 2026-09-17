@@ -16,13 +16,13 @@ cd "$(dirname "$0")"
 PLACEHOLDER='https://TU-SERVIDOR.example.org'
 
 if [ ! -f .env ]; then
-  echo "falta glasses/.env con VITE_API_BASE=https://tu-dominio" >&2
+  echo "falta glasses/.env con VITE_BACKEND_URL=https://tu-dominio" >&2
   exit 1
 fi
 
-BASE=$(grep -E '^[[:space:]]*VITE_API_BASE=' .env | tail -1 | cut -d= -f2- | tr -d '"'"'"'\r' | xargs)
+BASE=$(grep -E '^[[:space:]]*VITE_BACKEND_URL=' .env | tail -1 | cut -d= -f2- | tr -d '"'"'"'\r' | xargs)
 if [ -z "$BASE" ]; then
-  echo "VITE_API_BASE vacio o ausente en glasses/.env" >&2
+  echo "VITE_BACKEND_URL vacio o ausente en glasses/.env" >&2
   exit 1
 fi
 
@@ -44,7 +44,15 @@ if grep -q 'TU-SERVIDOR.example.org' "$TMP/app.json"; then
   exit 1
 fi
 
+# --sdk-ver NO es opcional: sin el, `evenhub pack` calcula el piso de
+# min_app_version con el SDK MAS NUEVO PUBLICADO, ignorando el que tiene el
+# proyecto, y estampa un piso mas alto que el necesario. Eso deja fuera a
+# usuarios que si podrian instalar la app. El aviso sale entre otras lineas y
+# el comando termina con exito, asi que es facil no verlo.
+SDK=$(python3 -c "import json;print(json.load(open('node_modules/@evenrealities/even_hub_sdk/package.json'))['version'])")
+echo "empaquetando contra el SDK instalado: ${SDK}"
+
 npx vite build
-npx evenhub pack "$TMP/app.json" dist -o "vozgram-${VER}.ehpk"
+npx evenhub pack "$TMP/app.json" dist --sdk-ver "$SDK" -o "vozgram-${VER}.ehpk"
 
 echo "listo: glasses/vozgram-${VER}.ehpk  (whitelist apuntando a tu dominio real)"
