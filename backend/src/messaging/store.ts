@@ -55,6 +55,17 @@ function conn(): DatabaseSync {
       pn  TEXT NOT NULL
     );
     CREATE INDEX IF NOT EXISTS idx_lidmap_pn ON lid_map(pn);
+    -- MIS nombres: como YO tengo guardada a la gente en mi agenda.
+    --
+    -- Va aparte de la tabla contacts porque esa la escribe WhatsApp en cada
+    -- sincronizacion, y lo que WhatsApp manda NO es mi etiqueta: es el
+    -- pushName, el nombre que cada quien se puso a si mismo. Guardar aqui mis
+    -- etiquetas junto a las suyas las condenaba a borrarse solas -- que es
+    -- exactamente lo que paso al revincular.
+    CREATE TABLE IF NOT EXISTS mis_nombres (
+      id   TEXT PRIMARY KEY,
+      name TEXT NOT NULL
+    );
   `)
 
   // MIGRACION. `CREATE TABLE IF NOT EXISTS` no toca una tabla que ya existe,
@@ -115,6 +126,28 @@ export function jidBase(jid: string): string {
   const usuario = jid.slice(0, i)
   const dosPuntos = usuario.indexOf(':')
   return dosPuntos < 0 ? jid : `${usuario.slice(0, dosPuntos)}${jid.slice(i)}`
+}
+
+/**
+ * Guarda MIS etiquetas. Ganan siempre sobre lo que mande WhatsApp: si me tome
+ * el trabajo de llamarle "Esposa" a alguien, ver su pushName no me sirve.
+ */
+export function guardarMisNombres(filas: { id: string; name: string }[]): void {
+  const utiles = filas.filter(f => f.id && f.name)
+  if (utiles.length === 0) return
+  const c = conn()
+  const stmt = c.prepare(`
+    INSERT INTO mis_nombres (id, name) VALUES (?, ?)
+    ON CONFLICT(id) DO UPDATE SET name = excluded.name
+  `)
+  c.exec('BEGIN')
+  try {
+    for (const f of utiles) stmt.run(jidBase(f.id), f.name)
+    c.exec('COMMIT')
+  } catch (err) {
+    c.exec('ROLLBACK')
+    throw err
+  }
 }
 
 /** Guarda equivalencias @lid <-> telefono, siempre en su forma base. */
@@ -271,12 +304,25 @@ export function listarChats(limit = 20, q?: string): Contact[] {
   const filas = conn()
     .prepare(`
       SELECT ch.id AS id,
-             COALESCE(NULLIF(ch.name, ''), NULLIF(co.name, ''), ch.id) AS name,
+             -- Orden de preferencia, de mas mio a mas ajeno:
+             --   1. mi etiqueta para ESTE identificador
+             --   2. mi etiqueta para su telefono equivalente (si el chat es @lid)
+             --   3. el nombre del chat  -> los grupos viven aqui
+             --   4. lo que mando WhatsApp -> el pushName, como se llama el/ella
+             --   5. el identificador crudo, que despues se vuelve legible
+             COALESCE(NULLIF(mn.name, ''), NULLIF(mn2.name, ''),
+                      NULLIF(ch.name, ''), NULLIF(co.name, ''), ch.id) AS name,
              ch.updated_at AS updatedAt,
              COALESCE(lm.pn, ch.id) AS grupo
       FROM chats ch
-      LEFT JOIN contacts co ON co.id = ch.id
-      LEFT JOIN lid_map  lm ON lm.lid = ch.id
+      LEFT JOIN contacts    co  ON co.id  = ch.id
+      LEFT JOIN lid_map     lm  ON lm.lid = ch.id
+      -- Dos veces: mi etiqueta puede estar guardada contra el @lid o contra el
+      -- telefono, y el chat puede venir identificado de cualquiera de las dos
+      -- formas. Sin el segundo join, renombrar por telefono no se ve en un
+      -- chat @lid.
+      LEFT JOIN mis_nombres mn  ON mn.id  = ch.id
+      LEFT JOIN mis_nombres mn2 ON mn2.id = COALESCE(lm.pn, ch.id)
       ORDER BY ch.updated_at DESC
     `)
     .all() as { id: string; name: string; updatedAt: number; grupo: string }[]
@@ -321,9 +367,11 @@ export function chatsSinNombre(): string[] {
     .prepare(`
       SELECT ch.id AS id
       FROM chats ch
-      LEFT JOIN contacts co ON co.id = ch.id
+      LEFT JOIN contacts    co ON co.id = ch.id
+      LEFT JOIN mis_nombres mn ON mn.id = ch.id
       WHERE (ch.id LIKE '%@s.whatsapp.net' OR ch.id LIKE '%@lid')
         AND (co.id IS NULL OR co.name = '')
+        AND (mn.id IS NULL OR mn.name = '')
     `)
     .all() as { id: string }[]
   return filas.map(f => f.id)

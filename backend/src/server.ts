@@ -22,10 +22,19 @@ app.use(express.json())
 
 // Log de una linea por request. Sirve para depurar desde los lentes, donde
 // no hay consola: si el pedido llega aca, el problema esta despues.
+//
+// Se registran los PARAMETROS, no solo la ruta. Sin esto no se distingue una
+// busqueda de un listado normal -- las dos son GET /api/contacts -- y quedamos
+// ciegos justo donde hay que mirar. Los valores se recortan para que un
+// parametro largo no llene el journal.
 app.use((req, _res, next) => {
   const ua = (req.header('user-agent') ?? '').slice(0, 60)
   const org = req.header('origin') ?? '-'
-  console.log(`[req] ${req.method} ${req.path} ip=${req.ip} origin=${org} ua=${ua}`)
+  const params = Object.entries(req.query as Record<string, unknown>)
+    .map(([k, v]) => `${k}=${String(v).slice(0, 40)}`)
+    .join(' ')
+  const ruta = params ? `${req.path} [${params}]` : req.path
+  console.log(`[req] ${req.method} ${ruta} ip=${req.ip} origin=${org} ua=${ua}`)
   next()
 })
 

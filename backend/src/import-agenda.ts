@@ -13,7 +13,7 @@
 import 'dotenv/config'
 import { readFileSync } from 'node:fs'
 import { DatabaseSync } from 'node:sqlite'
-import { guardarContactos } from './messaging/store'
+import { guardarMisNombres } from './messaging/store'
 
 const ruta = process.argv[2]
 const aplicar = process.argv.includes('--aplicar')
@@ -120,29 +120,49 @@ if (existe.n === 0) {
   console.error('Este script corre en el servidor, donde vive la base de WhatsApp.')
   process.exit(1)
 }
+/**
+ * Chats de PERSONA con el telefono que les corresponde.
+ *
+ * No alcanza con mirar los @s.whatsapp.net: WhatsApp esta migrando a @lid, que
+ * NO lleva el telefono adentro, y hoy son mas de la mitad de los chats. Para
+ * esos el telefono sale de lid_map, que es la tabla de equivalencias.
+ */
 const chats = db
-  .prepare("SELECT id FROM chats WHERE id LIKE '%@s.whatsapp.net'")
-  .all() as { id: string }[]
+  .prepare(`
+    SELECT ch.id AS id, COALESCE(lm.pn, ch.id) AS telefono
+    FROM chats ch
+    LEFT JOIN lid_map lm ON lm.lid = ch.id
+    WHERE ch.id LIKE '%@s.whatsapp.net' OR ch.id LIKE '%@lid'
+  `)
+  .all() as { id: string; telefono: string }[]
 
 const aEscribir: { id: string; name: string }[] = []
+let sinTelefonoConocido = 0
 for (const c of chats) {
+  if (!c.telefono.endsWith('@s.whatsapp.net')) { sinTelefonoConocido++; continue }
   // 5216643637705:22@s.whatsapp.net -> 5216643637705 -> 6643637705
-  const crudo = c.id.split('@')[0]!.split(':')[0]!
+  const crudo = c.telefono.split('@')[0]!.split(':')[0]!
   const k = clave(crudo)
   if (!k) continue
   const nombre = porClave.get(k)
-  if (nombre) aEscribir.push({ id: c.id, name: nombre })
+  // Se guarda contra el TELEFONO, no contra el id del chat: asi el nombre
+  // aplica a las dos identidades de la persona sin escribirlo dos veces.
+  if (nombre) aEscribir.push({ id: c.telefono, name: nombre })
 }
 
 console.log('\n=== cruce con tus chats ===')
 console.log('  chats de personas      :', chats.length)
-console.log('  quedarian con nombre   :', aEscribir.length)
-console.log('  seguirian como numero  :', chats.length - aEscribir.length)
+console.log('  sin telefono conocido  :', sinTelefonoConocido, '(@lid sin equivalencia todavia)')
+console.log('  quedarian con TU nombre:', aEscribir.length)
+console.log('  seguirian sin el       :', chats.length - aEscribir.length - sinTelefonoConocido)
 
 if (!aplicar) {
   console.log('\n(simulacion: no se escribio nada. Agrega --aplicar para guardar)')
   process.exit(0)
 }
 
-guardarContactos(aEscribir)
-console.log('\nGUARDADOS', aEscribir.length, 'nombres.')
+// A mis_nombres, no a contacts: WhatsApp reescribe contacts en cada
+// sincronizacion y se llevaria estas etiquetas por delante.
+guardarMisNombres(aEscribir)
+console.log('\nGUARDADOS', aEscribir.length, 'nombres TUYOS.')
+console.log('Ganan sobre lo que mande WhatsApp y sobreviven a una revinculacion.')
