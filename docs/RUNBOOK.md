@@ -48,6 +48,49 @@ que se ejecuta.
 
 ---
 
+## Tarea común: ponerle a un contacto el nombre de la agenda
+
+No es una falla, es lo que más se va a pedir.
+
+WhatsApp **no le entrega la agenda** a un dispositivo vinculado: manda el
+*pushName*, el nombre que cada quien se puso a sí mismo. Por eso un contacto
+puede verse como `YC`, como `💤💤` o como su número, aunque en el teléfono del
+dueño esté guardado con otro nombre.
+
+```bash
+cd /opt/vozgram && set -a && . ./.env && set +a
+
+npx tsx src/renombrar.ts 6631999919                      # solo CONSULTA
+npx tsx src/renombrar.ts 6631999919 "Esposa"             # lo cambia
+```
+
+- Sin el nombre **no escribe nada**: muestra cómo se ve hoy. Ante la duda,
+  consulta primero.
+- Busca por los **últimos 10 dígitos**, así que da igual el formato: `52`,
+  `521`, `044` y `+` varían de contacto a contacto.
+- **No hay que reiniciar el servicio.** Se ve al abrir la app.
+- El nombre va a la tabla `mis_nombres`, que WhatsApp no toca: sobrevive a una
+  resincronización y a una revinculación.
+
+Si responde que no hay chats con ese número, **no es un error**: la base guarda
+conversaciones, no la agenda. Hasta que no exista un chat, no hay a qué ponerle
+nombre. La persona tiene que escribir, o el dueño escribirle.
+
+### Muchos de golpe
+
+Si son decenas, conviene reimportar la agenda en vez de uno por uno. Requiere
+que el dueño exporte sus contactos a un `.vcf` desde su teléfono:
+
+```bash
+npx tsx src/import-agenda.ts data/agenda.vcf            # simula, no escribe
+npx tsx src/import-agenda.ts data/agenda.vcf --aplicar
+```
+
+**Borra el `.vcf` del servidor al terminar.** Es la agenda completa de una
+persona y no tiene por qué quedarse ahí; los nombres ya viven en la base.
+
+---
+
 ## Síntoma: HTTP 500 al abrir chats de WhatsApp
 
 Telegram sigue funcionando (los adaptadores están aislados con
