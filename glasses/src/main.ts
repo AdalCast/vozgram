@@ -158,10 +158,25 @@ function persist(): void {
 const who = () => target?.name ?? '?'
 const firstName = () => who().split(' ')[0] ?? '?'
 
-/** Titulo de la lista: en que app estas y, si hay busqueda, que buscaste. */
+/**
+ * Titulo de la lista: en que app estas, que buscaste, y como se busca.
+ *
+ * La pista va aqui y no como un renglon aparte porque la lista es un
+ * contenedor de items: cualquier linea que le agregue seria SELECCIONABLE, y
+ * un elemento que no lleva a ningun chat es peor que no tener pista.
+ *
+ * Que exista importa: el buscador estaba desde la v0.10.0 y nada en pantalla
+ * lo anunciaba, asi que no se usaba. Una funcion que no se descubre es una
+ * funcion que no existe.
+ *
+ * El titulo comparte la barra con el reloj y quedan unos 45 caracteres utiles;
+ * la busqueda se recorta para que la pista nunca se salga de pantalla.
+ */
 const tituloLista = () => {
   const app = provider?.label ?? 'Chats'
-  return query ? `${app}: ${query}` : app
+  return query
+    ? `${app}: ${query.slice(0, 16)} · doble tap sale`
+    : `${app} · mantén tap busca`
 }
 
 /** PICK es la raiz solo cuando no hay menu de apps que mostrar. */
