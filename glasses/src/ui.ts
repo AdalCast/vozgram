@@ -34,7 +34,10 @@ export function clockContainer(hhmm: string): TextContainerProperty {
     // El texto va pegado a la IZQUIERDA de su contenedor, asi que la posicion
     // del contenedor ES la del reloj. Ajustado al ancho del texto para que no
     // quede flotando en medio de una caja vacia.
-    xPosition: SCREEN_W - 140,
+    // El indicador que dibuja el firmware va pegado al FINAL del contenedor,
+    // no a una posicion fija: empujar el contenedor al borde los lleva a los
+    // dos. Medido en el simulador.
+    xPosition: SCREEN_W - 68,
     yPosition: 2,
     width: 64,
     height: 26,
