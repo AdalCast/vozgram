@@ -334,21 +334,54 @@ const masCompleto = (...cs: string[]): string =>
 // --- Soniox -----------------------------------------------------------------
 let soniox: SonioxStream | null = null
 
-/** Se conecta al entrar, pero SIN prender el microfono. */
+/**
+ * Distingue el primer intento de una reconexion.
+ *
+ * Sin esto, "reconectando" saldria tambien al abrir el chat por primera vez, y
+ * un aviso que aparece cuando todo va bien deja de significar algo.
+ */
+let vozEstuvoLista = false
+
+/**
+ * Se conecta al entrar, pero SIN prender el microfono.
+ *
+ * EL STREAM SE ASIGNA SOLO SI CONECTO. Antes se asignaba antes de `connect()`,
+ * asi que un fallo de red dejaba `soniox` apuntando a un objeto roto pero NO
+ * nulo -- y `encenderMic()` solo rearmaba cuando era nulo. Resultado: todos los
+ * dictados siguientes usaban ese stream muerto (ws:CLOSED, el contador de
+ * chunks subiendo, nada mas), y la unica salida era cerrar la app.
+ */
 async function prepare(): Promise<void> {
-  soniox = new SonioxStream({
+  vozEstuvoLista = false
+  const nuevo = new SonioxStream({
     onPartial: t => pintarVoz(t),
     onFinal: t => { draft = t; pintarVoz(t); if (screen === 'DICTATE') persist() },
-    onError: m => { lastNote = `STT: ${m}`; pintarVoz(draft) },
-    onClosed: c => { lastNote = `socket cerrado (${c})`; pintarVoz(draft) },
+    onError: m => { lastNote = m; pintarVoz(ultimoPintado || draft) },
+    // El cierre ya no se anuncia solo: quien manda es onEstado, porque
+    // reconectar es automatico y "socket cerrado (1006)" no le sirve a nadie.
+    onClosed: () => {},
+    onEstado: e => {
+      if (e === 'listo') { vozEstuvoLista = true; lastNote = '' }
+      else if (e === 'conectando') {
+        lastNote = vozEstuvoLista ? 'sin red: reconectando...' : ''
+      } else {
+        lastNote = 'sin conexion. Suelta y vuelve a intentar.'
+      }
+      pintarVoz(ultimoPintado || draft)
+    },
   })
-  await soniox.connect()
+  await nuevo.connect()
+  soniox = nuevo          // recien aca: si connect() fallo, no queda basura
 }
 
 /** Enciende el microfono. Comun al dictado y a la busqueda. */
 async function encenderMic(): Promise<void> {
   micOk = null; chunks = 0; bytes = 0; lastNote = ''; draft = ''; ultimoPintado = ''
-  if (!soniox) { try { await prepare() } catch { /* ya se mostro el error */ } }
+  // No basta con que exista: un stream que se quedo cerrado no sirve, y
+  // reusarlo es justo lo que dejaba la app muda hasta reiniciarla.
+  if (!soniox || soniox.state === 'CLOSED') {
+    try { await prepare() } catch { /* ya se mostro el error */ }
+  }
   // audioControl devuelve boolean. Ignorarlo fue el bug: la pantalla decia
   // "Grabando" con el microfono apagado.
   try {
