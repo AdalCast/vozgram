@@ -160,8 +160,43 @@ function volcarMensajes(msgs: WAMessage[], enVivo = false): void {
     if (!esGrupo && !fromMe && m.pushName) {
       guardarContactos([{ id: jid, name: m.pushName }])
     }
+    // Una identidad @lid recien vista puede no estar unida a su telefono
+    // todavia. Mientras no lo este, TU etiqueta -que vive contra el telefono-
+    // no la alcanza, y en pantalla sale el pushName. Ver pedirMapeoLids().
+    if (jid.endsWith('@lid')) pedirMapeoLids()
   }
   guardarMensajes(filas)
+}
+
+/**
+ * Vuelve a unir identidades @lid con su telefono, con freno.
+ *
+ * POR QUE EXISTE: `mapearLids()` corria UNA sola vez, 45 s despues de
+ * conectar, y nunca mas. Un @lid que aparecia despues -alguien que te escribe
+ * por primera vez desde esa identidad- se quedaba sin unir hasta el proximo
+ * reinicio. Y mientras no este unido, tu etiqueta de `mis_nombres` (guardada
+ * contra el TELEFONO) no lo alcanza: la cascada cae hasta `contacts`, que
+ * tiene el pushName. El sintoma es que en la bandeja sale como se llama esa
+ * persona a si misma en vez de como la tienes guardada, y que "se arregla
+ * solo" dias despues -- cuando el servicio se reinicia por cualquier motivo.
+ *
+ * El freno no es adorno: una sincronizacion trae decenas de mensajes de golpe
+ * y sin el saldria una consulta por cada uno. `chatsLid()` ya devuelve solo
+ * los que faltan, asi que cuando no hay nada nuevo esto no cuesta nada.
+ */
+const FRENO_LIDS_MS = 8_000
+let lidsEnCola: ReturnType<typeof setTimeout> | null = null
+
+function pedirMapeoLids(): void {
+  if (lidsEnCola) return
+  lidsEnCola = setTimeout(() => {
+    lidsEnCola = null
+    mapearLids()
+      .then(n => { if (n) console.log(`[whatsapp] ${n} identidad(es) @lid unificadas`) })
+      // Si el socket esta caido no pasa nada: el proximo mensaje lo reintenta,
+      // y al reconectar corre la pasada de los 45 s de todos modos.
+      .catch(() => {})
+  }, FRENO_LIDS_MS)
 }
 
 let sock: WASocket | null = null

@@ -76,6 +76,33 @@ Si responde que no hay chats con ese número, **no es un error**: la base guarda
 conversaciones, no la agenda. Hasta que no exista un chat, no hay a qué ponerle
 nombre. La persona tiene que escribir, o el dueño escribirle.
 
+### Si sale con OTRO nombre, y al entrar al chat sale bien
+
+Sintoma: en la bandeja de no leidos aparece como esa persona se llama a si
+misma -su *pushName*-, pero al abrir la lista de chats sale como tu la tienes
+guardada. Y dias despues "se arregla solo".
+
+Causa: WhatsApp esta migrando a `@lid` y una persona puede tener DOS
+identidades. Tu etiqueta se guarda contra el **telefono**; para que alcance al
+`@lid` hace falta que `lid_map` los una. Mientras no esten unidos, la cascada
+cae hasta `contacts`, que tiene el pushName.
+
+```bash
+cd /opt/vozgram && set -a && . ./.env && set +a
+npx tsx src/diag-nombres.ts            # todos
+npx tsx src/diag-nombres.ts Esposa     # uno
+```
+
+Mira la seccion **identidades @lid SIN unir**. Si hay alguna, esa es la causa.
+
+**Ya no deberia pasar**: antes `mapearLids()` corria UNA vez, 45 s despues de
+conectar, y nunca mas -- un `@lid` que aparecia despues se quedaba suelto hasta
+el proximo reinicio. Ahora cada mensaje de un `@lid` pide el mapeo, con un
+freno de 8 s. Se ve en el log como `N identidad(es) @lid unificadas`.
+
+Si aun asi aparece una suelta, `systemctl restart vozgram` la une en la pasada
+de los 45 s.
+
 ### Muchos de golpe
 
 Si son decenas, conviene reimportar la agenda en vez de uno por uno. Requiere
