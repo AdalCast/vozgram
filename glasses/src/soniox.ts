@@ -20,6 +20,9 @@ export interface SonioxHandlers {
  * el socket se reabre llamando connect() de nuevo.
  */
 export class SonioxStream {
+  /** Lo arma `cerrar()` mientras espera la ultima confirmacion. */
+  private alQuedarLimpio: (() => void) | null = null
+
   private ws: WebSocket | null = null
   private finalText = ''
   private handlers: SonioxHandlers
@@ -75,8 +78,14 @@ export class SonioxStream {
         if (t.is_final) this.finalText += txt
         else partial += txt
       }
-      if (partial) this.handlers.onPartial(this.finalText + partial)
-      else this.handlers.onFinal(this.finalText)
+      if (partial) {
+        this.handlers.onPartial(this.finalText + partial)
+      } else {
+        this.handlers.onFinal(this.finalText)
+        // Ya no queda nada en vuelo: si alguien espera el cierre limpio, este
+        // es el momento en que Soniox termino de confirmar.
+        this.alQuedarLimpio?.()
+      }
     }
   }
 
@@ -85,11 +94,51 @@ export class SonioxStream {
     if (this.ws?.readyState === WebSocket.OPEN) this.ws.send(pcm)
   }
 
-  /** Cierra el stream. El string vacio le dice a Soniox "termine de hablar". */
+  /** Cierre ABRUPTO. Para salir de la app; tira lo que este en vuelo. */
   close(): void {
     if (this.ws?.readyState === WebSocket.OPEN) this.ws.send('')
     this.ws?.close()
     this.ws = null
+  }
+
+  /**
+   * Cierra ESPERANDO a que Soniox confirme lo que quedo en vuelo, y devuelve
+   * el texto completo.
+   *
+   * POR QUE EXISTE: el string vacio le dice a Soniox "termine de hablar", pero
+   * `close()` cerraba el socket en el MISMO instante, sin darle tiempo a
+   * contestar. Todo lo que estuviera como parcial se perdia -- y los parciales
+   * son justo lo que el usuario esta viendo escribirse en la pantalla. Soltar
+   * el tap un segundo antes borraba el mensaje entero, no la ultima palabra.
+   *
+   * El tope existe porque esto pasa con el dedo levantado y la pantalla
+   * esperando: mas de un segundo largo se siente como que la app se colgo.
+   * Si vence, se devuelve lo confirmado hasta ese momento y quien llama decide
+   * si prefiere lo que habia en pantalla.
+   */
+  async cerrar(topeMs = 1200): Promise<string> {
+    const ws = this.ws
+    if (!ws || ws.readyState !== WebSocket.OPEN) { this.ws = null; return this.finalText }
+
+    ws.send('')
+    await new Promise<void>(listo => {
+      let hecho = false
+      const terminar = (): void => {
+        if (hecho) return
+        hecho = true
+        clearTimeout(reloj)
+        this.alQuedarLimpio = null
+        listo()
+      }
+      const reloj = setTimeout(terminar, topeMs)
+      this.alQuedarLimpio = terminar
+      // Si Soniox cierra por su cuenta tampoco hay nada mas que esperar.
+      ws.addEventListener('close', terminar, { once: true })
+    })
+
+    ws.close()
+    this.ws = null
+    return this.finalText
   }
 
   /** Estado del socket, para diagnostico en pantalla. */

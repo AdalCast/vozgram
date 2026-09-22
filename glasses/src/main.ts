@@ -299,11 +299,37 @@ function searchView(t: string): string {
   return `Buscar en ${app}${diagnostico()}\n\n${cuerpo || 'Di un nombre... (suelta para buscar)'}`
 }
 
+/**
+ * Lo ULTIMO que se dibujo, incluidos los parciales.
+ *
+ * Existe como red de seguridad: `draft` solo recibe lo que Soniox ya confirmo,
+ * asi que si el usuario suelta el tap antes de esa confirmacion, draft esta
+ * vacio pero la pantalla estaba llena. Vale mas lo que el VIO escrito que una
+ * pantalla en blanco.
+ */
+let ultimoPintado = ''
+
 /** Repinta la pantalla de voz que corresponda, sea dictado o busqueda. */
 function pintarVoz(t: string): void {
+  ultimoPintado = t
   if (screen === 'DICTATE') setText(dictateView(t))
   else if (screen === 'SEARCH') setText(searchView(t))
 }
+
+/**
+ * El mas completo de los candidatos.
+ *
+ * `finalText` es acumulativo y lo pintado es `finalText + parcial`, asi que en
+ * el caso normal el mas largo es el que mas alcanzo a decir el usuario.
+ *
+ * NO es infalible: Soniox puede CORREGIR un parcial por un final mas corto, y
+ * ahi esto se quedaria con el texto viejo. Se acepta a proposito -- perder el
+ * mensaje entero es mucho peor que una ultima palabra mal transcrita, y de
+ * todos modos el usuario lo lee en la pantalla de confirmacion antes de
+ * enviarlo.
+ */
+const masCompleto = (...cs: string[]): string =>
+  cs.map(c => c.trim()).filter(Boolean).sort((a, b) => b.length - a.length)[0] ?? ''
 
 // --- Soniox -----------------------------------------------------------------
 let soniox: SonioxStream | null = null
@@ -321,7 +347,7 @@ async function prepare(): Promise<void> {
 
 /** Enciende el microfono. Comun al dictado y a la busqueda. */
 async function encenderMic(): Promise<void> {
-  micOk = null; chunks = 0; bytes = 0; lastNote = ''; draft = ''
+  micOk = null; chunks = 0; bytes = 0; lastNote = ''; draft = ''; ultimoPintado = ''
   if (!soniox) { try { await prepare() } catch { /* ya se mostro el error */ } }
   // audioControl devuelve boolean. Ignorarlo fue el bug: la pantalla decia
   // "Grabando" con el microfono apagado.
@@ -333,11 +359,19 @@ async function encenderMic(): Promise<void> {
   }
 }
 
-async function apagarMic(): Promise<void> {
+/**
+ * Apaga el microfono y devuelve lo que Soniox alcanzo a confirmar.
+ *
+ * Se ESPERA el cierre limpio: cerrar el socket de golpe tiraba todo lo que
+ * estuviera en vuelo. Quien llama decide si le basta con eso o prefiere lo que
+ * habia en pantalla.
+ */
+async function apagarMic(): Promise<string> {
   lastReleaseAt = Date.now()
   await bridge.audioControl(false)
-  soniox?.close()
+  const confirmado = soniox ? await soniox.cerrar() : ''
   soniox = null
+  return confirmado
 }
 
 /**
@@ -537,7 +571,10 @@ async function startListening(): Promise<void> {
 /** SOLTAR en DICTATE: se apaga el microfono y se pasa a confirmar. */
 async function stopListening(): Promise<void> {
   if (screen !== 'DICTATE') return
-  await apagarMic()
+  const confirmado = await apagarMic()
+  // Tres candidatos: lo que Soniox confirmo al cerrar, lo ultimo que se vio en
+  // pantalla, y lo que ya habia. Se toma el mas completo.
+  draft = masCompleto(confirmado, ultimoPintado, draft)
   screen = 'CONFIRM'
   const cuerpo = draft.trim() || '(no se escuchó nada)'
   await gotoText(`Enviar a ${who()}:\n\n${cuerpo}\n\ntap = ENVIAR · doble = repetir`)
@@ -555,7 +592,10 @@ async function startSearch(): Promise<void> {
 /** SOLTAR en SEARCH: se busca y se vuelve a la lista ya filtrada. */
 async function endSearch(): Promise<void> {
   if (screen !== 'SEARCH') return
-  await apagarMic()
+  const confirmado = await apagarMic()
+  // Mismo problema que al dictar: soltar rapido dejaba la busqueda vacia y
+  // parecia que el microfono no habia oido nada.
+  draft = masCompleto(confirmado, ultimoPintado, draft)
   query = draft.trim()
   draft = ''
   await toPick()
