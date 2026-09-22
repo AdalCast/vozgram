@@ -7,7 +7,7 @@ import {
 import { SonioxStream } from './soniox'
 import {
   getProviders, getContacts, getMessages, sendMessage,
-  getUnread,
+  getUnread, marcarLeido,
   type Provider, type Contact, type Msg, type Pendiente,
 } from './api'
 import { TEXT_ID, TEXT_NAME, CLOCK_ID, CLOCK_NAME, startUpWithText, rebuildWithText, rebuildWithList, rebuildInicio } from './ui'
@@ -28,7 +28,7 @@ import { TEXT_ID, TEXT_NAME, CLOCK_ID, CLOCK_NAME, startUpWithText, rebuildWithT
 // El microfono SOLO se enciende mientras se mantiene presionado. Nunca escucha solo.
 // ---------------------------------------------------------------------------
 
-type Screen = 'APPS' | 'INFO' | 'PICK' | 'SEARCH' | 'READ' | 'DICTATE' | 'CONFIRM'
+type Screen = 'INICIO' | 'APPS' | 'INFO' | 'PICK' | 'SEARCH' | 'READ' | 'DICTATE' | 'CONFIRM'
 
 const STORAGE_KEY = 'vozgram.draft'
 const MAX_VISIBLE = 400
@@ -43,7 +43,7 @@ const HISTORY = 10           // ultimos mensajes a traer
 const POLL_MS = 10_000       // cada cuanto revisamos si llego respuesta
 const CLOCK_MS = 15_000      // cada cuanto revisamos si cambio el minuto
 
-let screen: Screen = 'APPS'
+let screen: Screen = 'INICIO'
 let providers: Provider[] = []
 let provider: Provider | null = null
 let query = ''               // busqueda activa, '' = sin filtro
@@ -193,8 +193,6 @@ const tituloLista = () => {
  */
 const marcar = (c: Contact): string => `${c.kind === 'grupo' ? '●' : '○'} ${c.name}`
 
-/** PICK es la raiz solo cuando no hay menu de apps que mostrar. */
-const pickEsRaiz = () => providers.length <= 1
 
 /**
  * Sufijo del menu cuando un mensajero NO esta listo.
@@ -390,11 +388,6 @@ const lineaPendiente = (p: Pendiente): string => {
   return `${marca} ${quien}  ${texto}`
 }
 
-/** Cuerpo del panel derecho. El vacio tambien comunica: decirlo es mejor. */
-function panelBandeja(): string {
-  if (pendientes.length === 0) return 'Sin mensajes pendientes'
-  return pendientes.map(lineaPendiente).join('\n')
-}
 
 /**
  * Pantalla de inicio: apps a la izquierda, bandeja a la derecha.
@@ -403,14 +396,55 @@ function panelBandeja(): string {
  * aparece igual con las apps listas y el panel se llena despues. Esperarla
  * antes de pintar dejaria la app en blanco justo al abrirla.
  */
+/**
+ * Abre un pendiente: lo marca leido y entra a su conversacion.
+ *
+ * El marcado NO se espera: entrar al chat es lo que el usuario pidio, y
+ * bloquearlo por una confirmacion de red haria que la app se sienta lenta por
+ * algo que a el no le importa. Si falla, se reintenta la proxima vez.
+ */
+async function marcarLeidoYAbrir(p: Pendiente): Promise<void> {
+  void marcarLeido(p.peer).catch(() => {})
+  pendientes = pendientes.filter(x => x.peer !== p.peer)
+  provider = providers.find(x => p.peer.startsWith(`${x.id}:`)) ?? null
+  target = { id: p.peer, name: p.quien }
+  await toRead()
+}
+
+/** Pantalla raiz: el foco arranca en la bandeja, que es lo que se mira. */
+async function toInicio(): Promise<void> {
+  stopPolling()
+  screen = 'INICIO'
+  target = null; provider = null; query = ''
+  await apagarMic()
+  await pintarInicio()
+  void refrescarBandeja()
+}
+
+/** Misma pantalla, foco en las aplicaciones. */
 async function toApps(): Promise<void> {
   stopPolling()
   screen = 'APPS'
   target = null; provider = null; query = ''
   await apagarMic()
   await pintarInicio()
-  void refrescarBandeja()
 }
+
+/**
+ * Las dos salidas van ESCRITAS, una en cada caja. Mover el foco es el unico
+ * gesto que la pantalla no tiene ya asignado, y esconderlo detras de un doble
+ * tap lo dejaria sin descubrir -- ademas de robarle al doble tap su unico
+ * significado en la raiz, que es salir de la app (lo exige la revision).
+ */
+const IR_APPS = '\u2192 Aplicaciones'
+const IR_BANDEJA = '\u2190 Volver'
+
+const filasBandeja = (): string[] =>
+  pendientes.length
+    ? [...pendientes.map(lineaPendiente), IR_APPS]
+    : ['Sin mensajes pendientes', IR_APPS]
+
+const filasApps = (): string[] => [...providers.map(etiqueta), IR_BANDEJA]
 
 async function pintarInicio(): Promise<void> {
   const n = pendientes.length
@@ -418,10 +452,11 @@ async function pintarInicio(): Promise<void> {
     : n === 1 ? 'VozGram \u00b7 1 pendiente'
     : `VozGram \u00b7 ${n} pendientes`
   clockShown = hhmm()
-  mirror(`${titulo}\n\n${panelBandeja()}`)
+  const foco = screen === 'APPS' ? 'apps' : 'bandeja'
+  mirror(`${titulo}\n\n${filasBandeja().join('\n')}`)
   await bleCall(
     () => bridge.rebuildPageContainer(
-      rebuildInicio(providers.map(etiqueta), panelBandeja(), titulo, clockShown)),
+      rebuildInicio(foco, filasApps(), filasBandeja(), titulo, clockShown)),
     'rebuild:inicio',
   )
 }
@@ -431,7 +466,7 @@ async function refrescarBandeja(): Promise<void> {
     const { pendientes: nuevos } = await getUnread(6)
     // Si el usuario ya se movio de pantalla, pintar aqui seria pisarle lo que
     // esta viendo con una pantalla que ya dejo atras.
-    if (screen !== 'APPS') { pendientes = nuevos; return }
+    if (screen !== 'INICIO' && screen !== 'APPS') { pendientes = nuevos; return }
     const antes = pendientes.map(p => p.peer + p.text).join('|')
     pendientes = nuevos
     if (antes !== nuevos.map(p => p.peer + p.text).join('|')) await pintarInicio()
@@ -566,7 +601,7 @@ try {
   }
 
   if (providers.length > 1) {
-    await toApps()
+    await toInicio()
   } else {
     // Un solo mensajero (o backend viejo): el menu de apps seria una lista de
     // un elemento, o sea un paso regalado. Vamos directo a los chats.
@@ -590,7 +625,19 @@ const unsubscribe = bridge.onEvenHubEvent(event => {
 
   if (event.listEvent) {
     const i = event.listEvent.currentSelectItemIndex ?? 0
+    if (screen === 'INICIO') {
+      // La ultima fila NO es un mensaje: es el paso a las aplicaciones.
+      const filas = filasBandeja()
+      if (filas[i] === IR_APPS) { void toApps(); return }
+      const p = pendientes[i]
+      if (!p) return
+      // Entrar a leerlo ES leerlo: se marca en el mensajero y sale de la
+      // bandeja. Asomarse a la lista no marca nada.
+      void marcarLeidoYAbrir(p)
+      return
+    }
     if (screen === 'APPS') {
+      if (filasApps()[i] === IR_BANDEJA) { void toInicio(); return }
       const elegido = providers[i] ?? null
       if (!elegido) return
       // Un mensajero roto no se esconde de la lista: sigue ahi, con su motivo.
@@ -633,15 +680,19 @@ const unsubscribe = bridge.onEvenHubEvent(event => {
   }
 
   if (type === OsEventTypeList.DOUBLE_CLICK_EVENT) {
-    if (screen === 'APPS') {
-      bridge.shutDownPageContainer(1)          // dialogo de salida del sistema
+    if (screen === 'INICIO') {
+      // La RAIZ. Aqui el doble tap solo significa salir: la revision del
+      // portal exige que abra el dialogo del sistema, y darle otro sentido
+      // seria quitarle el unico que no se puede negociar.
+      bridge.shutDownPageContainer(1)
+    } else if (screen === 'APPS') {
+      toInicio()
     } else if (screen === 'INFO') {
-      toApps()
+      toInicio()
     } else if (screen === 'PICK') {
       // Atras en dos tiempos: primero se suelta la busqueda, despues se sale.
       if (query) { query = ''; toPick() }
-      else if (pickEsRaiz()) bridge.shutDownPageContainer(1)
-      else toApps()
+      else toInicio()
     } else if (screen === 'CONFIRM') {
       toRead()                                  // repetir el dictado
     } else {

@@ -140,67 +140,92 @@ export const rebuildWithList = (names: string[], hhmm: string, title: string) =>
     textObject: [clockContainer(hhmm), titleContainer(title)],
   })
 
-// --- Pantalla de inicio: apps a la izquierda, bandeja a la derecha ----------
+// --- Pantalla de inicio: apps a la izquierda, bandeja a la derecha ---------
 export const INBOX_ID = 7; export const INBOX_NAME = 'inbox'
 
-/** Ancho suficiente para "WhatsApp" completo. Abreviar se ve mal y no hace falta. */
 const APPS_W = 140
 const MARGEN = 6
 const TOPE = BAR_H + 2
+const PANEL_X = MARGEN + APPS_W + MARGEN
+const PANEL_W = SCREEN_W - PANEL_X - MARGEN
+const ALTO = SCREEN_H - TOPE - MARGEN
 
 /**
- * Las apps van en una LISTA (se eligen) y los pendientes en un TEXTO (solo se
- * miran). No es una preferencia: un solo contenedor por pagina captura eventos,
- * asi que solo uno de los dos puede ser seleccionable. Se eligio que fueran las
- * apps porque son el camino a todo lo demas; la bandeja es un vistazo.
+ * La misma pantalla con el foco en un lado o en el otro.
  *
- * La caja de apps se ajusta a su contenido en vez de estirarse, para que las
- * opciones queden ARRIBA y no flotando a media caja.
+ * Un solo contenedor por pagina captura eventos, asi que "mover el foco" es
+ * literalmente reconstruir la pagina cambiando cual de los dos es la LISTA y
+ * cual es el TEXTO. No hay forma de tener los dos vivos a la vez.
+ *
+ * El foco arranca en la bandeja porque es lo que se mira al abrir; las apps
+ * son el camino cuando ya sabes a quien buscas.
  */
 export function rebuildInicio(
-  apps: string[], bandeja: string, titulo: string, hhmm: string,
+  foco: 'bandeja' | 'apps',
+  apps: string[],
+  pendientes: string[],
+  titulo: string,
+  hhmm: string,
 ) {
+  const caja = (esLista: boolean, x: number, w: number, alto: number) => ({
+    xPosition: x,
+    yPosition: TOPE,
+    width: w,
+    height: alto,
+    borderWidth: 1,
+    borderColor: 5,
+    borderRadius: 6,
+    paddingLength: esLista ? 6 : 8,
+  })
+
+  // Alto de la caja de apps: ajustada al contenido para que quede ARRIBA y no
+  // flotando a media caja. Un renglon mide ~42 px.
+  const altoApps = 42 * Math.max(apps.length, 1) + 20
+
+  if (foco === 'apps') {
+    return new RebuildPageContainer({
+      containerTotalNum: 4,
+      listObject: [
+        new ListContainerProperty({
+          ...caja(true, MARGEN, APPS_W, altoApps),
+          containerID: LIST_ID, containerName: LIST_NAME,
+          isEventCapture: 1, zOrderIndex: 1,
+          itemContainer: new ListItemContainerProperty({
+            itemCount: apps.length, itemName: apps,
+            isItemSelectBorderEn: 1, itemWidth: APPS_W - 16,
+          }),
+        }),
+      ],
+      textObject: [
+        new TextContainerProperty({
+          ...caja(false, PANEL_X, PANEL_W, ALTO),
+          containerID: INBOX_ID, containerName: INBOX_NAME,
+          content: pendientes.join('\n'), isEventCapture: 0, zOrderIndex: 4,
+        }),
+        clockContainer(hhmm),
+        titleContainer(titulo),
+      ],
+    })
+  }
+
   return new RebuildPageContainer({
     containerTotalNum: 4,
     listObject: [
       new ListContainerProperty({
-        xPosition: MARGEN,
-        yPosition: TOPE,
-        width: APPS_W,
-        // Un renglon mide ~42 px. Si la caja se queda corta, el contenedor
-        // dibuja barra de scroll en vez de recortar.
-        height: 42 * Math.max(apps.length, 1) + 20,
-        borderWidth: 1,
-        borderColor: 5,
-        borderRadius: 6,
-        paddingLength: 6,
-        containerID: LIST_ID,
-        containerName: LIST_NAME,
-        isEventCapture: 1,
-        zOrderIndex: 1,
+        ...caja(true, PANEL_X, PANEL_W, ALTO),
+        containerID: LIST_ID, containerName: LIST_NAME,
+        isEventCapture: 1, zOrderIndex: 1,
         itemContainer: new ListItemContainerProperty({
-          itemCount: apps.length,
-          itemName: apps,
-          isItemSelectBorderEn: 1,
-          itemWidth: APPS_W - 16,
+          itemCount: pendientes.length, itemName: pendientes,
+          isItemSelectBorderEn: 1, itemWidth: PANEL_W - 16,
         }),
       }),
     ],
     textObject: [
       new TextContainerProperty({
-        xPosition: MARGEN + APPS_W + MARGEN,
-        yPosition: TOPE,
-        width: SCREEN_W - (MARGEN + APPS_W + MARGEN) - MARGEN,
-        height: SCREEN_H - TOPE - MARGEN,
-        borderWidth: 1,
-        borderColor: 5,
-        borderRadius: 6,
-        paddingLength: 8,
-        containerID: INBOX_ID,
-        containerName: INBOX_NAME,
-        content: bandeja,
-        isEventCapture: 0,
-        zOrderIndex: 4,
+        ...caja(false, MARGEN, APPS_W, altoApps),
+        containerID: INBOX_ID, containerName: INBOX_NAME,
+        content: apps.join('\n'), isEventCapture: 0, zOrderIndex: 4,
       }),
       clockContainer(hhmm),
       titleContainer(titulo),

@@ -39,6 +39,9 @@ export interface Pendiente {
 export const getUnread = (limit = 8) =>
   call<{ pendientes: Pendiente[] }>(`/api/unread?limit=${limit}`)
 
+export const marcarLeido = (peer: string) =>
+  call<{ ok: true }>('/api/read', { method: 'POST', body: JSON.stringify({ peer }) })
+
 export const getProviders = () =>
   call<{ providers: Provider[] }>('/api/providers')
 
