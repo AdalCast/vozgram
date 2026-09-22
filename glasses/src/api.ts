@@ -27,6 +27,18 @@ async function call<T>(path: string, init?: RequestInit): Promise<T> {
 export const getSonioxKey = () =>
   call<{ api_key: string }>('/api/soniox-key', { method: 'POST' })
 
+/** Un mensaje pendiente de leer, de cualquier mensajero. */
+export interface Pendiente {
+  peer: string
+  quien: string
+  text: string
+  ts: number
+  kind?: 'persona' | 'grupo'
+}
+
+export const getUnread = (limit = 8) =>
+  call<{ pendientes: Pendiente[] }>(`/api/unread?limit=${limit}`)
+
 export const getProviders = () =>
   call<{ providers: Provider[] }>('/api/providers')
 

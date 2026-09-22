@@ -31,9 +31,12 @@ const BAR_H = 32
  */
 export function clockContainer(hhmm: string): TextContainerProperty {
   return new TextContainerProperty({
-    xPosition: SCREEN_W - 104,
+    // El texto va pegado a la IZQUIERDA de su contenedor, asi que la posicion
+    // del contenedor ES la del reloj. Ajustado al ancho del texto para que no
+    // quede flotando en medio de una caja vacia.
+    xPosition: SCREEN_W - 140,
     yPosition: 2,
-    width: 100,
+    width: 64,
     height: 26,
     borderWidth: 0,
     borderColor: 5,
@@ -136,3 +139,71 @@ export const rebuildWithList = (names: string[], hhmm: string, title: string) =>
     listObject: [listPage(names)],
     textObject: [clockContainer(hhmm), titleContainer(title)],
   })
+
+// --- Pantalla de inicio: apps a la izquierda, bandeja a la derecha ----------
+export const INBOX_ID = 7; export const INBOX_NAME = 'inbox'
+
+/** Ancho suficiente para "WhatsApp" completo. Abreviar se ve mal y no hace falta. */
+const APPS_W = 140
+const MARGEN = 6
+const TOPE = BAR_H + 2
+
+/**
+ * Las apps van en una LISTA (se eligen) y los pendientes en un TEXTO (solo se
+ * miran). No es una preferencia: un solo contenedor por pagina captura eventos,
+ * asi que solo uno de los dos puede ser seleccionable. Se eligio que fueran las
+ * apps porque son el camino a todo lo demas; la bandeja es un vistazo.
+ *
+ * La caja de apps se ajusta a su contenido en vez de estirarse, para que las
+ * opciones queden ARRIBA y no flotando a media caja.
+ */
+export function rebuildInicio(
+  apps: string[], bandeja: string, titulo: string, hhmm: string,
+) {
+  return new RebuildPageContainer({
+    containerTotalNum: 4,
+    listObject: [
+      new ListContainerProperty({
+        xPosition: MARGEN,
+        yPosition: TOPE,
+        width: APPS_W,
+        // Un renglon mide ~42 px. Si la caja se queda corta, el contenedor
+        // dibuja barra de scroll en vez de recortar.
+        height: 42 * Math.max(apps.length, 1) + 20,
+        borderWidth: 1,
+        borderColor: 5,
+        borderRadius: 6,
+        paddingLength: 6,
+        containerID: LIST_ID,
+        containerName: LIST_NAME,
+        isEventCapture: 1,
+        zOrderIndex: 1,
+        itemContainer: new ListItemContainerProperty({
+          itemCount: apps.length,
+          itemName: apps,
+          isItemSelectBorderEn: 1,
+          itemWidth: APPS_W - 16,
+        }),
+      }),
+    ],
+    textObject: [
+      new TextContainerProperty({
+        xPosition: MARGEN + APPS_W + MARGEN,
+        yPosition: TOPE,
+        width: SCREEN_W - (MARGEN + APPS_W + MARGEN) - MARGEN,
+        height: SCREEN_H - TOPE - MARGEN,
+        borderWidth: 1,
+        borderColor: 5,
+        borderRadius: 6,
+        paddingLength: 8,
+        containerID: INBOX_ID,
+        containerName: INBOX_NAME,
+        content: bandeja,
+        isEventCapture: 0,
+        zOrderIndex: 4,
+      }),
+      clockContainer(hhmm),
+      titleContainer(titulo),
+    ],
+  })
+}

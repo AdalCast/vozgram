@@ -7,9 +7,10 @@ import {
 import { SonioxStream } from './soniox'
 import {
   getProviders, getContacts, getMessages, sendMessage,
-  type Provider, type Contact, type Msg,
+  getUnread,
+  type Provider, type Contact, type Msg, type Pendiente,
 } from './api'
-import { TEXT_ID, TEXT_NAME, CLOCK_ID, CLOCK_NAME, startUpWithText, rebuildWithText, rebuildWithList } from './ui'
+import { TEXT_ID, TEXT_NAME, CLOCK_ID, CLOCK_NAME, startUpWithText, rebuildWithText, rebuildWithList, rebuildInicio } from './ui'
 
 // ---------------------------------------------------------------------------
 // VozGram — push-to-talk, dos mensajeros.
@@ -52,6 +53,7 @@ let draft = ''
 let lastRendered = ''
 let busy = false
 let lastReleaseAt = 0
+let pendientes: Pendiente[] = []   // bandeja de no leidos, para el inicio
 let pages: string[] = []     // conversacion ya paginada
 let page = 0
 let pollTimer: number | undefined
@@ -369,12 +371,73 @@ function stopPolling(): void {
 }
 
 // --- Navegacion -------------------------------------------------------------
+/**
+ * Un pendiente en un renglon: circulo, quien, y lo que dijo.
+ *
+ * El circulo ancla la linea. Sin el, seis renglones seguidos se leen como un
+ * parrafo corrido y no como mensajes distintos -- probado en el simulador.
+ */
+const PANEL_CARS = 38   // medido en el simulador con el panel a 414 px
+
+const lineaPendiente = (p: Pendiente): string => {
+  const marca = p.kind === 'grupo' ? '\u25cf' : '\u25cb'
+  const quien = p.quien.slice(0, 20)
+  // El panel ENVUELVE el texto, no lo corta: un mensaje largo -- una URL, por
+  // ejemplo -- se come el renglon del siguiente y la bandeja pierde entradas
+  // sin avisar. Se recorta para que cada pendiente ocupe UNA linea.
+  const hueco = PANEL_CARS - quien.length - 4
+  const texto = p.text.length > hueco ? `${p.text.slice(0, hueco - 1)}\u2026` : p.text
+  return `${marca} ${quien}  ${texto}`
+}
+
+/** Cuerpo del panel derecho. El vacio tambien comunica: decirlo es mejor. */
+function panelBandeja(): string {
+  if (pendientes.length === 0) return 'Sin mensajes pendientes'
+  return pendientes.map(lineaPendiente).join('\n')
+}
+
+/**
+ * Pantalla de inicio: apps a la izquierda, bandeja a la derecha.
+ *
+ * La bandeja se trae SIN bloquear el dibujado: si la red tarda, la pantalla
+ * aparece igual con las apps listas y el panel se llena despues. Esperarla
+ * antes de pintar dejaria la app en blanco justo al abrirla.
+ */
 async function toApps(): Promise<void> {
   stopPolling()
   screen = 'APPS'
   target = null; provider = null; query = ''
   await apagarMic()
-  await gotoList(providers.map(etiqueta), 'VozGram')
+  await pintarInicio()
+  void refrescarBandeja()
+}
+
+async function pintarInicio(): Promise<void> {
+  const n = pendientes.length
+  const titulo = n === 0 ? 'VozGram'
+    : n === 1 ? 'VozGram \u00b7 1 pendiente'
+    : `VozGram \u00b7 ${n} pendientes`
+  clockShown = hhmm()
+  mirror(`${titulo}\n\n${panelBandeja()}`)
+  await bleCall(
+    () => bridge.rebuildPageContainer(
+      rebuildInicio(providers.map(etiqueta), panelBandeja(), titulo, clockShown)),
+    'rebuild:inicio',
+  )
+}
+
+async function refrescarBandeja(): Promise<void> {
+  try {
+    const { pendientes: nuevos } = await getUnread(6)
+    // Si el usuario ya se movio de pantalla, pintar aqui seria pisarle lo que
+    // esta viendo con una pantalla que ya dejo atras.
+    if (screen !== 'APPS') { pendientes = nuevos; return }
+    const antes = pendientes.map(p => p.peer + p.text).join('|')
+    pendientes = nuevos
+    if (antes !== nuevos.map(p => p.peer + p.text).join('|')) await pintarInicio()
+  } catch (err) {
+    note(`bandeja: ${String(err).slice(0, 60)}`)
+  }
 }
 
 /**
