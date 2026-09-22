@@ -1,11 +1,12 @@
 import { mkdirSync } from 'node:fs'
 // SOLO TIPOS: se borran al compilar, no cargan nada en tiempo de ejecucion.
 import type { WASocket, WAMessage, Chat } from 'baileys'
-import type { Contact, Msg, MessagingProvider, EstadoMensajero } from './port'
+import type { Contact, Msg, MessagingProvider, EstadoMensajero, Pendiente } from './port'
 import type { ChatGuardado, MsgGuardado, ContactoGuardado } from './store'
 import {
   guardarChats, guardarMensajes, guardarContactos, listarChats, historial,
   chatsSinNombre, nombreGuardado, guardarLidMap, chatsLid,
+  noLeidos, clavesNoLeidas, limpiarNoLeidos, sumarNoLeido,
 } from './store'
 
 /**
@@ -88,6 +89,10 @@ function volcarChats(chats: Chat[]): void {
       id: c.id,
       name: c.name ?? '',
       updatedAt: num(c.conversationTimestamp) || num(c.lastMessageRecvTimestamp),
+      // `== null` y no `num()`: WhatsApp manda actualizaciones PARCIALES, y un
+      // campo ausente convertido a cero vaciaria la bandeja sola. Ausente se
+      // deja pasar como undefined para que el almacen conserve lo que tenia.
+      ...(c.unreadCount == null ? {} : { unread: num(c.unreadCount) }),
     })
   }
   guardarChats(filas)
@@ -111,7 +116,12 @@ function anotarDescarte(motivo: string): void {
   descartes.set(motivo, (descartes.get(motivo) ?? 0) + 1)
 }
 
-function volcarMensajes(msgs: WAMessage[]): void {
+/**
+ * `enVivo` distingue un mensaje que ACABA de llegar de uno que viene en la
+ * sincronizacion de historial. Solo el primero suma a los no leidos: contar los
+ * del historial pondria la bandeja llena de cosas ya leidas hace meses.
+ */
+function volcarMensajes(msgs: WAMessage[], enVivo = false): void {
   const filas: MsgGuardado[] = []
   for (const m of msgs) {
     const jid = m.key?.remoteJid
@@ -136,9 +146,14 @@ function volcarMensajes(msgs: WAMessage[]): void {
     filas.push({
       id, chatId: jid, out: fromMe, text: t, ts,
       ...(quien ? { sender: quien } : {}),
+      // Jid del participante, distinto del nombre: marcar leido lo exige.
+      ...(m.key?.participant ? { participant: m.key.participant } : {}),
     })
     // Un mensaje nuevo tambien mueve el chat hacia arriba en la lista.
     guardarChats([{ id: jid, name: '', updatedAt: ts }])
+    // El contador sube aqui por si WhatsApp no manda su chats.update. Cuando
+    // llega, ese valor MANDA y corrige lo que hayamos contado de mas.
+    if (enVivo && !fromMe) sumarNoLeido(jid)
     // En un chat 1 a 1, pushName es el nombre de quien escribe: sirve para
     // ponerle cara al numero cuando no lo tenemos en la agenda. En grupos NO,
     // porque ahi pushName es el del participante, no el del grupo.
@@ -210,8 +225,8 @@ async function abrir(): Promise<WASocket> {
   s.ev.on('chats.update', updates => {
     volcarChats(updates.filter(u => u.id) as Chat[])
   })
-  s.ev.on('messages.upsert', ({ messages }) => {
-    volcarMensajes(messages)
+  s.ev.on('messages.upsert', ({ messages, type }) => {
+    volcarMensajes(messages, type === 'notify')
     // Solo se avisa cuando algo se TIRA. En el camino feliz el log queda
     // callado; cuando algo se cae, dice que y por que. Un descarte silencioso
     // es peor que un error ruidoso: este bug nos costo dos horas justamente
@@ -420,6 +435,33 @@ export const whatsapp: MessagingProvider = {
   async sendMessage(peer: string, text: string): Promise<void> {
     const s = await getSocket()
     await s.sendMessage(peer, { text })
+  },
+
+  // Sale del almacen, sin tocar la red: WhatsApp no permite consultar nada.
+  async noLeidos(limite = 10): Promise<Pendiente[]> {
+    await getSocket()
+    return noLeidos(limite)
+  },
+
+  /**
+   * Marca leido en WhatsApp Y en el almacen local.
+   *
+   * Los dos hacen falta: si solo se marcara remoto, el contador local seguiria
+   * en alto hasta la proxima sincronizacion y el mensaje volveria a salir en
+   * la bandeja despues de haberlo leido.
+   */
+  async marcarLeido(peer: string): Promise<void> {
+    const claves = clavesNoLeidas(peer)
+    limpiarNoLeidos(peer)
+    if (claves.length === 0) return
+    const s = await getSocket()
+    await s.readMessages(claves.map(c => ({
+      remoteJid: peer,
+      id: c.id,
+      fromMe: false,
+      // Solo en grupos. Sin participant, WhatsApp ignora la marca.
+      ...(c.participant ? { participant: c.participant } : {}),
+    })))
   },
 
   estado: () => estadoActual,

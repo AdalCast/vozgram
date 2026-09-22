@@ -1,7 +1,7 @@
 import { DatabaseSync } from 'node:sqlite'
 import { mkdirSync } from 'node:fs'
 import { dirname } from 'node:path'
-import type { Contact, Msg } from './port'
+import type { Contact, Msg, Pendiente } from './port'
 import { normalizar, soloLegible } from './texto'
 
 /**
@@ -75,6 +75,16 @@ function conn(): DatabaseSync {
   if (!cols.some(c => c.name === 'sender')) {
     db.exec('ALTER TABLE messages ADD COLUMN sender TEXT')
   }
+  // Quien mando el mensaje DENTRO de un grupo. Hace falta para marcar leido:
+  // la clave que pide WhatsApp lleva participant, y sin el los grupos no se
+  // pueden marcar.
+  if (!cols.some(c => c.name === 'participant')) {
+    db.exec('ALTER TABLE messages ADD COLUMN participant TEXT')
+  }
+  const colsChats = db.prepare('PRAGMA table_info(chats)').all() as { name: string }[]
+  if (!colsChats.some(c => c.name === 'unread')) {
+    db.exec('ALTER TABLE chats ADD COLUMN unread INTEGER NOT NULL DEFAULT 0')
+  }
 
   return db
 }
@@ -84,6 +94,8 @@ export interface ChatGuardado {
   id: string
   name: string
   updatedAt: number
+  /** Sin leer. `undefined` = el evento no lo traia; NO es lo mismo que cero. */
+  unread?: number
 }
 
 export interface ContactoGuardado {
@@ -217,6 +229,8 @@ export interface MsgGuardado {
   ts: number
   /** Quien escribio. Solo se usa en grupos. */
   sender?: string
+  /** Jid de quien escribio en un grupo. Necesario para marcar leido. */
+  participant?: string
 }
 
 /**
@@ -226,15 +240,21 @@ export interface MsgGuardado {
 export function guardarChats(chats: ChatGuardado[]): void {
   if (chats.length === 0) return
   const c = conn()
+  // El -1 significa "no vino en el evento". WhatsApp manda actualizaciones
+  // PARCIALES: tomar un campo ausente como cero vaciaria la bandeja sola.
   const stmt = c.prepare(`
-    INSERT INTO chats (id, name, updated_at) VALUES (?, ?, ?)
+    INSERT INTO chats (id, name, updated_at, unread) VALUES (?, ?, ?, MAX(?, 0))
     ON CONFLICT(id) DO UPDATE SET
       name       = CASE WHEN excluded.name != '' THEN excluded.name ELSE chats.name END,
-      updated_at = MAX(chats.updated_at, excluded.updated_at)
+      updated_at = MAX(chats.updated_at, excluded.updated_at),
+      unread     = CASE WHEN ? >= 0 THEN ? ELSE chats.unread END
   `)
   c.exec('BEGIN')
   try {
-    for (const ch of chats) stmt.run(ch.id, ch.name, ch.updatedAt)
+    for (const ch of chats) {
+      const u = ch.unread ?? -1
+      stmt.run(ch.id, ch.name, ch.updatedAt, u, u, u)
+    }
     c.exec('COMMIT')
   } catch (err) {
     c.exec('ROLLBACK')
@@ -247,12 +267,15 @@ export function guardarMensajes(msgs: MsgGuardado[]): void {
   if (msgs.length === 0) return
   const c = conn()
   const stmt = c.prepare(`
-    INSERT INTO messages (id, chat_id, out, text, ts, sender) VALUES (?, ?, ?, ?, ?, ?)
+    INSERT INTO messages (id, chat_id, out, text, ts, sender, participant)
+    VALUES (?, ?, ?, ?, ?, ?, ?)
     ON CONFLICT(id) DO NOTHING
   `)
   c.exec('BEGIN')
   try {
-    for (const m of msgs) stmt.run(m.id, m.chatId, m.out ? 1 : 0, m.text, m.ts, m.sender ?? null)
+    for (const m of msgs) {
+      stmt.run(m.id, m.chatId, m.out ? 1 : 0, m.text, m.ts, m.sender ?? null, m.participant ?? null)
+    }
     c.exec('COMMIT')
   } catch (err) {
     c.exec('ROLLBACK')
@@ -367,6 +390,79 @@ export function listarChats(limit = 20, q?: string): Contact[] {
     salida = salida.filter(c => normalizar(c.name).includes(aguja) || c.id.includes(aguja))
   }
   return salida.slice(0, limit)
+}
+
+/**
+ * Mensajes sin leer, uno por chat, mas reciente primero.
+ *
+ * UNO por chat y no todos: en una pantalla de seis renglones, tres mensajes
+ * del mismo grupo tapan a las otras tres personas que tambien escribieron. El
+ * dato que importa de un vistazo es QUIEN espera respuesta, no cuanto dijo.
+ */
+export function noLeidos(limite = 10): Pendiente[] {
+  const filas = conn()
+    .prepare(`
+      SELECT ch.id AS id,
+             COALESCE(NULLIF(mn.name,''), NULLIF(mn2.name,''),
+                      NULLIF(ch.name,''), NULLIF(co.name,''), ch.id) AS nombre,
+             COALESCE(lm.pn, ch.id) AS grupo,
+             m.text AS text, m.ts AS ts, m.sender AS sender
+      FROM chats ch
+      LEFT JOIN contacts    co  ON co.id  = ch.id
+      LEFT JOIN lid_map     lm  ON lm.lid = ch.id
+      LEFT JOIN mis_nombres mn  ON mn.id  = ch.id
+      LEFT JOIN mis_nombres mn2 ON mn2.id = COALESCE(lm.pn, ch.id)
+      JOIN messages m ON m.id = (
+        SELECT id FROM messages
+        WHERE chat_id = ch.id AND out = 0 AND text <> ''
+        ORDER BY ts DESC LIMIT 1
+      )
+      WHERE ch.unread > 0
+      ORDER BY m.ts DESC
+      LIMIT ?
+    `)
+    .all(limite) as {
+      id: string; nombre: string; grupo: string
+      text: string; ts: number; sender: string | null
+    }[]
+
+  return filas.map(f => {
+    const esGrupo = f.id.endsWith('@g.us')
+    // En un grupo interesa QUIEN hablo, no como se llama el grupo: el nombre
+    // del grupo mas el de la persona no caben en un renglon de la pantalla.
+    const crudo = esGrupo && f.sender ? f.sender : f.nombre
+    const limpio = soloLegible(crudo)
+    return {
+      peer: f.id,
+      quien: limpio || numeroLegible(f.grupo),
+      text: soloLegible(f.text),
+      ts: f.ts,
+      kind: esGrupo ? ('grupo' as const) : ('persona' as const),
+    }
+  })
+}
+
+/** Claves de los mensajes sin leer de un chat, para marcarlos leidos. */
+export function clavesNoLeidas(chatId: string, limite = 30): {
+  id: string; participant: string | null
+}[] {
+  return conn()
+    .prepare(`
+      SELECT id, participant FROM messages
+      WHERE chat_id = ? AND out = 0
+      ORDER BY ts DESC LIMIT ?
+    `)
+    .all(chatId, limite) as { id: string; participant: string | null }[]
+}
+
+/** Suma uno al contador local cuando llega un mensaje nuevo. */
+export function sumarNoLeido(chatId: string): void {
+  conn().prepare('UPDATE chats SET unread = unread + 1 WHERE id = ?').run(chatId)
+}
+
+/** Pone en cero el contador local. Lo remoto lo marca el adaptador. */
+export function limpiarNoLeidos(chatId: string): void {
+  conn().prepare('UPDATE chats SET unread = 0 WHERE id = ?').run(chatId)
 }
 
 /** Chats de personas que siguen sin nombre. */

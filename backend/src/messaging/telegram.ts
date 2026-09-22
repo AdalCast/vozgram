@@ -1,6 +1,6 @@
 import { TelegramClient } from 'telegram'
 import { StringSession } from 'telegram/sessions'
-import type { Contact, Msg, MessagingProvider } from './port'
+import type { Contact, Msg, MessagingProvider, Pendiente } from './port'
 import { normalizar, soloLegible } from './texto'
 
 /** Nombre para mostrar de una entidad de Telegram (persona, grupo o canal). */
@@ -81,6 +81,41 @@ export const telegram: MessagingProvider = {
         return quien ? { ...base, sender: quien } : base
       })
       .reverse()
+  },
+
+  /**
+   * Al reves que WhatsApp: aqui SE PREGUNTA. Los dialogos ya traen el contador,
+   * y de los que tienen pendientes se pide el ultimo mensaje.
+   *
+   * Se acota a los chats mas recientes con pendientes porque cada uno es una
+   * ida y vuelta a la red: veinte chats serian veinte llamadas, y la bandeja
+   * tiene que abrirse rapido o no sirve caminando.
+   */
+  async noLeidos(limite = 10): Promise<Pendiente[]> {
+    const c = await getClient()
+    const conPendientes = (await c.getDialogs({ limit: 100 }))
+      .filter(d => (d.isUser || d.isGroup) && d.unreadCount > 0)
+      .slice(0, limite)
+
+    const salida: Pendiente[] = []
+    for (const d of conPendientes) {
+      const msgs = await c.getMessages(d.id!, { limit: 1 }).catch(() => [])
+      const m = msgs[0]
+      if (!m?.message) continue
+      salida.push({
+        peer: String(d.id),
+        quien: soloLegible(d.title ?? '') || 'sin nombre',
+        text: soloLegible(m.message),
+        ts: m.date,
+        kind: d.isGroup ? 'grupo' : 'persona',
+      })
+    }
+    return salida
+  },
+
+  async marcarLeido(peer: string): Promise<void> {
+    const c = await getClient()
+    await c.markAsRead(peer)
   },
 
   async sendMessage(peer: string, text: string): Promise<void> {

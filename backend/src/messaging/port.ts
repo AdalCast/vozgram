@@ -54,6 +54,23 @@ export interface Msg {
  */
 export type EstadoMensajero = 'listo' | 'conectando' | 'desvinculado' | 'caido'
 
+/**
+ * Un mensaje que espera respuesta, para la bandeja unica.
+ *
+ * Es plano a proposito: la bandeja mezcla mensajeros y ordena por hora, asi
+ * que cada entrada tiene que bastarse sola sin saber de donde vino.
+ */
+export interface Pendiente {
+  /** Id YA prefijado. Al elegirlo se entra a ese chat sin traducir nada. */
+  peer: string
+  /** Nombre del chat, o de quien hablo si es grupo. */
+  quien: string
+  text: string
+  /** Epoch en segundos. Es lo unico que permite intercalar dos mensajeros. */
+  ts: number
+  kind?: 'persona' | 'grupo'
+}
+
 export interface MessagingProvider {
   /** Identificador corto y estable. Sirve para elegir adaptador y para los logs. */
   readonly id: string
@@ -72,6 +89,19 @@ export interface MessagingProvider {
   getHistory(peer: string, limit?: number): Promise<Msg[]>
 
   sendMessage(peer: string, text: string): Promise<void>
+
+  /**
+   * Mensajes sin leer, mas reciente primero. Opcional: un mensajero que no
+   * sepa de no leidos simplemente no aporta a la bandeja.
+   */
+  noLeidos?(limite?: number): Promise<Pendiente[]>
+
+  /**
+   * Marca un chat como leido. Se llama al ABRIR un mensaje desde la bandeja,
+   * no al asomarse a ella: un vistazo no es una lectura, y esta misma accion
+   * es la que le enciende las palomitas azules a quien escribio.
+   */
+  marcarLeido?(peer: string): Promise<void>
 
   /**
    * Estado de la conexion, SIN abrirla ni tocar la red.

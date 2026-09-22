@@ -2,7 +2,7 @@ import 'dotenv/config'
 import express from 'express'
 import cors from 'cors'
 import rateLimit from 'express-rate-limit'
-import { listarTodo, listarDe, mensajeros, resolver } from './messaging'
+import { listarTodo, listarDe, mensajeros, resolver, bandeja, marcarLeido } from './messaging'
 
 const app = express()
 
@@ -140,6 +140,35 @@ app.get('/api/messages', auth, async (req, res) => {
   try {
     const { proveedor, peer } = resolver(peerCrudo)
     res.json({ messages: await proveedor.getHistory(peer, limit) })
+  } catch (err) {
+    res.status(500).json({ error: String(err) })
+  }
+})
+
+/**
+ * La bandeja: lo sin leer de los dos mensajeros, mezclado y ordenado por hora.
+ * Alimenta la pantalla de inicio de los lentes.
+ */
+app.get('/api/unread', auth, async (req, res) => {
+  const limit = Math.min(Number(req.query.limit ?? 10) || 10, 20)
+  try {
+    res.json({ pendientes: await bandeja(limit) })
+  } catch (err) {
+    res.status(500).json({ error: String(err) })
+  }
+})
+
+/**
+ * Marca un chat como leido. Se llama al ABRIR un mensaje desde la bandeja, no
+ * al asomarse: un vistazo no es una lectura, y esta llamada es la que le
+ * enciende las palomitas azules a quien escribio.
+ */
+app.post('/api/read', auth, async (req, res) => {
+  const { peer } = req.body ?? {}
+  if (!peer) return res.status(400).json({ error: 'falta peer' })
+  try {
+    await marcarLeido(String(peer))
+    res.json({ ok: true })
   } catch (err) {
     res.status(500).json({ error: String(err) })
   }

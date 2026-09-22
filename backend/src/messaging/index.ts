@@ -1,8 +1,8 @@
-import type { Contact, MessagingProvider, EstadoMensajero } from './port'
+import type { Contact, MessagingProvider, EstadoMensajero, Pendiente } from './port'
 import { telegram } from './telegram'
 import { whatsapp } from './whatsapp'
 
-export type { Contact, Msg, MessagingProvider, EstadoMensajero } from './port'
+export type { Contact, Msg, MessagingProvider, EstadoMensajero, Pendiente } from './port'
 
 /** Todos los mensajeros disponibles, indexados por su id. */
 const registro: Record<string, MessagingProvider> = {
@@ -102,6 +102,45 @@ export async function listarTodo(limitPorMensajero = 20, q?: string): Promise<Co
   }
 
   return juntos.sort((a, b) => (b.updatedAt ?? 0) - (a.updatedAt ?? 0))
+}
+
+/**
+ * La bandeja: lo sin leer de TODOS los mensajeros, mezclado por hora.
+ *
+ * Mezclar es el punto. Dos bandejas separadas obligan a revisar las dos para
+ * saber si alguien espera respuesta, y entonces no ahorran nada frente a
+ * entrar a cada app.
+ *
+ * allSettled igual que en la lista de chats: si un mensajero esta caido, la
+ * bandeja sigue mostrando el otro en vez de quedarse vacia.
+ */
+export async function bandeja(limite = 10): Promise<Pendiente[]> {
+  const proveedores = activos().filter(p => typeof p.noLeidos === 'function')
+
+  const resultados = await Promise.allSettled(
+    proveedores.map(p => p.noLeidos!(limite)),
+  )
+
+  const juntos: Pendiente[] = []
+  resultados.forEach((r, i) => {
+    const p = proveedores[i]!
+    if (r.status === 'rejected') {
+      console.warn(`[bandeja] ${p.id} no respondio: ${String(r.reason).slice(0, 120)}`)
+      return
+    }
+    // El peer viaja PREFIJADO, igual que en la lista de chats: al elegir un
+    // mensaje se entra a su conversacion sin traducir nada.
+    for (const x of r.value) juntos.push({ ...x, peer: `${p.id}${SEP}${x.peer}` })
+  })
+
+  return juntos.sort((a, b) => b.ts - a.ts).slice(0, limite)
+}
+
+/** Marca leido un chat, enrutando al mensajero que le toque. */
+export async function marcarLeido(peerCrudo: string): Promise<void> {
+  const { proveedor, peer } = resolver(peerCrudo)
+  if (!proveedor.marcarLeido) return
+  await proveedor.marcarLeido(peer)
 }
 
 /**
