@@ -52,7 +52,18 @@ fi
 SDK=$(python3 -c "import json;print(json.load(open('node_modules/@evenrealities/even_hub_sdk/package.json'))['version'])")
 echo "empaquetando contra el SDK instalado: ${SDK}"
 
-npx vite build
-npx evenhub pack "$TMP/app.json" dist --sdk-ver "$SDK" -o "vozgram-${VER}.ehpk"
+# GUARDA: nunca pisar un paquete ya generado. Si el archivo existe, casi
+# siempre significa que se cambio codigo sin subir la version -- y entonces
+# dos .ehpk con el mismo nombre traen cosas distintas, sin forma de saber cual
+# esta instalado en los lentes.
+SALIDA="vozgram-${VER}.ehpk"
+if [ -e "$SALIDA" ]; then
+  echo "ya existe ${SALIDA}. Subiste la version en app.json?" >&2
+  echo "Si de verdad quieres rehacerlo, borralo o muevelo primero." >&2
+  exit 1
+fi
 
-echo "listo: glasses/vozgram-${VER}.ehpk  (whitelist apuntando a tu dominio real)"
+npx vite build
+npx evenhub pack "$TMP/app.json" dist --sdk-ver "$SDK" -o "$SALIDA"
+
+echo "listo: glasses/${SALIDA}  (whitelist apuntando a tu dominio real)"
