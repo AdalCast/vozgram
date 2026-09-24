@@ -28,6 +28,26 @@
       }
       #state { font-size: 12px; opacity: .6; text-align: center; min-height: 1.4em; }
       footer { font-size: 11px; opacity: .38; text-align: center; max-width: 420px; }
+      /* Leyenda de gestos: las mismas marcas que se ven en los lentes. */
+      #gestos {
+        width: 100%; max-width: 520px; margin-top: 4px;
+        border-top: 1px solid #1f5c30; padding-top: 12px;
+      }
+      #gestos summary {
+        cursor: pointer; color: #7de08a; font-size: 13px; opacity: .75;
+      }
+      #gestos .fila {
+        display: flex; gap: 12px; align-items: baseline; margin-top: 12px;
+      }
+      #gestos .marca {
+        flex: 0 0 42px; text-align: center; color: #b9ffc6; font-size: 15px;
+      }
+      #gestos .que { font-size: 12px; opacity: .6; margin-top: 2px; }
+      #gestos .nombre { font-size: 13px; color: #b9ffc6; }
+      #gestos .pie { font-size: 11px; opacity: .45; margin-top: 14px; }
+      #gestos .seccion {
+        margin-top: 20px; font-size: 12px; color: #7de08a; opacity: .75;
+      }
     </style>
   </head>
   <body>
@@ -40,6 +60,7 @@
          blanco, que ademas es causal de rechazo en el review de Even Hub. -->
     <div id="screen">Conectando con los lentes...</div>
     <div id="state"></div>
+    <details id="gestos" hidden></details>
 
     <footer>
       Esta pantalla refleja lo que aparece en tus lentes.<br />

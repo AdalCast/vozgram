@@ -16,6 +16,8 @@ export const LIST_NAME = 'contacts'
 export const CLOCK_ID = 3
 export const CLOCK_NAME = 'clock'
 export const TITLE_ID = 4
+export const PISTA_ID = 6
+export const PISTA_NAME = 'pista'
 export const TITLE_NAME = 'title'
 /**
  * Alto de la barra superior: reloj a la derecha, titulo a la izquierda.
@@ -75,12 +77,53 @@ export function titleContainer(text: string): TextContainerProperty {
   })
 }
 
+/**
+ * Alto de la franja de la pista, abajo.
+ *
+ * MEDIDO: con 30 la cola de la `g` de "grabar" quedaba cortada contra el borde
+ * inferior -- se leia "qrabar". La `g` completa mide 16 filas de pixeles y solo
+ * se veian 13. Con 36, y el mismo relleno de 4, entra entera y los margenes
+ * siguen alineados con el texto de arriba.
+ */
+export const PISTA_H = 36
+
+/**
+ * La pista de gestos, atenuada.
+ *
+ * `textColor` va de 0 a 4 y por defecto es 4. En 2 la pista se lee sin
+ * competir con los mensajes: es la unica forma que da el hardware de decir
+ * "esto es secundario", porque no hay tamaños de fuente ni negritas.
+ *
+ * Vive en SU PROPIO contenedor y no dentro del texto por dos razones: se puede
+ * atenuar aparte, y se puede cambiar con un `textContainerUpgrade` sin
+ * reconstruir la pagina entera.
+ */
+export function pistaContainer(texto: string): TextContainerProperty {
+  return new TextContainerProperty({
+    xPosition: 0,
+    yPosition: SCREEN_H - PISTA_H,
+    width: SCREEN_W,
+    height: PISTA_H - 2,
+    borderWidth: 0,
+    borderColor: 5,
+    paddingLength: 4,
+    containerID: PISTA_ID,
+    containerName: PISTA_NAME,
+    content: texto,
+    isEventCapture: 0,
+    zOrderIndex: 4,
+    textColor: 2,
+  })
+}
+
 export function textPage(content: string): TextContainerProperty {
   return new TextContainerProperty({
     xPosition: 0,
     yPosition: 0,
     width: SCREEN_W,
-    height: SCREEN_H,
+    // Se le resta la franja de la pista: si el texto la tapara, el ultimo
+    // renglon del mensaje quedaria debajo y DESAPARECERIA sin avisar.
+    height: SCREEN_H - PISTA_H,
     borderWidth: 0,
     borderColor: 5,
     paddingLength: 4,
@@ -129,10 +172,17 @@ export const startUpWithText = (content: string, hhmm: string) =>
     textObject: [textPage(content), clockContainer(hhmm)],
   })
 
-export const rebuildWithText = (content: string, hhmm: string) =>
+/**
+ * La pista va SIEMPRE, aunque venga vacia.
+ *
+ * Tenerla siempre presente permite cambiarla con un upgrade en vez de
+ * reconstruir la pagina: reconstruir resetea cosas -- la seleccion de una
+ * lista, por ejemplo -- y cuesta mas por el enlace BLE.
+ */
+export const rebuildWithText = (content: string, hhmm: string, pista = '') =>
   new RebuildPageContainer({
-    containerTotalNum: 2,
-    textObject: [textPage(content), clockContainer(hhmm)],
+    containerTotalNum: 3,
+    textObject: [textPage(content), clockContainer(hhmm), pistaContainer(pista)],
   })
 
 // La lista lleva reloj Y titulo: tres contenedores.
