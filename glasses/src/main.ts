@@ -3,12 +3,14 @@ import {
   TextContainerUpgrade,
   AudioInputSource,
   OsEventTypeList,
+  type EvenHubEvent,
 } from '@evenrealities/even_hub_sdk'
 import { SonioxStream } from './soniox'
 import {
   getProviders, getContacts, getMessages, sendMessage,
   getUnread, marcarLeido,
   type Provider, type Contact, type Msg, type Pendiente,
+  SinRespuesta,
 } from './api'
 import { TEXT_ID, TEXT_NAME, CLOCK_ID, CLOCK_NAME, startUpWithText, rebuildWithText, rebuildWithList, rebuildInicio } from './ui'
 
@@ -178,7 +180,7 @@ const tituloLista = () => {
   const app = provider?.label ?? 'Chats'
   return query
     ? `${app}: ${query.slice(0, 16)} · doble tap sale`
-    : `${app} · mantén tap busca`
+    : `${app} · mantén para buscar contacto`
 }
 
 /**
@@ -296,7 +298,7 @@ function dictateView(t: string): string {
 function searchView(t: string): string {
   const cuerpo = tail(t.trim())
   const app = provider?.label ?? 'los chats'
-  return `Buscar en ${app}${diagnostico()}\n\n${cuerpo || 'Di un nombre... (suelta para buscar)'}`
+  return `Buscar contacto en ${app}${diagnostico()}\n\n${cuerpo || 'Di un nombre... (suelta para buscar)'}`
 }
 
 /**
@@ -646,7 +648,12 @@ async function doSend(): Promise<void> {
     // Volver AL CHAT, no al menu: acabas de escribir, quieres ver la respuesta.
     setTimeout(() => { toRead() }, 1200)
   } catch (err) {
-    await setText(`FALLÓ el envío.\n${String(err)}\n\n(doble tap = volver)`)
+    // Sin respuesta NO se dice "fallo": pudo haber salido, y reintentar a
+    // ciegas lo mandaria dos veces. Volver al chat recarga el historial y ahi
+    // se ve si esta.
+    await setText(err instanceof SinRespuesta
+      ? 'No se confirmó el envío.\n\nPuede que sí haya llegado: revisa el chat antes de reintentar.\n\ntap = reintentar · doble = volver'
+      : `FALLÓ el envío.\n${String(err)}\n\n(doble tap = volver)`)
   } finally {
     busy = false
   }
@@ -654,12 +661,39 @@ async function doSend(): Promise<void> {
 
 // --- Arranque ---------------------------------------------------------------
 clockShown = hhmm()
-const ok = await bridge.createStartUpPageContainer(startUpWithText('VozGram\n\nCargando...', clockShown))
+let ok = await bridge.createStartUpPageContainer(startUpWithText('VozGram\n\nCargando...', clockShown))
+// 1 NO siempre es "contenedor invalido": tambien significa que la pagina YA
+// EXISTE, cuando la WebView se recarga sobre la app ya arrancada. Rendirse
+// ahi dejaria la app muerta por algo que se arregla reconstruyendo.
+if (ok === 1 && await bridge.rebuildPageContainer(rebuildWithText('VozGram\n\nCargando...', clockShown))) ok = 0
 if (ok !== 0) throw new Error(`createStartUpPageContainer fallo: ${ok}`)
 lastRendered = 'VozGram\n\nCargando...'
 mirror(lastRendered)
 
-draft = (await bridge.getLocalStorage(STORAGE_KEY)) || ''
+// --- Eventos: se escuchan DESDE AQUI ----------------------------------------
+// En cuanto hay algo en los lentes, el doble toque tiene que poder salir. Antes
+// el manejador se registraba al FINAL del arranque, despues de leer el
+// borrador y de hablar con el backend: si cualquiera de las dos se colgaba, la
+// pantalla decia "Cargando..." y el doble toque no hacia nada. Es causal de
+// rechazo en la revision del portal.
+//
+// Hasta que el arranque termina solo se atiende el doble toque, y solo para
+// salir: el resto de la app todavia no existe. `?? -1` y no `?? 0`: un sysEvent
+// sin eventType es un TOQUE, y aqui el toque no hace nada.
+let arrancado = false
+const unsubscribe = bridge.onEvenHubEvent(event => {
+  if (arrancado) { manejarEvento(event); return }
+  if ((event.sysEvent?.eventType ?? -1) === OsEventTypeList.DOUBLE_CLICK_EVENT) {
+    void bridge.shutDownPageContainer(1).catch(() => {})
+  }
+})
+
+// Con tope: `getLocalStorage` puede no volver nunca en los lentes, y sin
+// borrador guardado la app funciona igual.
+draft = (await Promise.race([
+  bridge.getLocalStorage(STORAGE_KEY),
+  new Promise<string>(r => setTimeout(() => r(''), BLE_TIMEOUT_MS)),
+])) || ''
 
 // El reloj corre siempre, en todas las pantallas.
 const clockTimer = setInterval(tickClock, CLOCK_MS)
@@ -684,10 +718,14 @@ try {
 } catch (err) {
   await gotoText(`No se pudo hablar con el backend.\n${String(err)}`)
 }
+arrancado = true
 
 // --- Eventos ----------------------------------------------------------------
+// Una DECLARACION de funcion y no una constante: se iza, asi que el manejador
+// registrado arriba, junto a la primera pantalla, ya la conoce. Solo se llama
+// con `arrancado`, cuando todo lo que toca ya esta declarado.
 // PROTOBUF: los ceros llegan como undefined. El `?? 0` NO es opcional.
-const unsubscribe = bridge.onEvenHubEvent(event => {
+function manejarEvento(event: EvenHubEvent): void {
   if (event.audioEvent?.audioPcm) {
     chunks++
     bytes += event.audioEvent.audioPcm.length
@@ -785,7 +823,7 @@ const unsubscribe = bridge.onEvenHubEvent(event => {
   if (type === OsEventTypeList.ABNORMAL_EXIT_EVENT || type === OsEventTypeList.SYSTEM_EXIT_EVENT) {
     cleanup()
   }
-})
+}
 
 function cleanup(): void {
   clearInterval(clockTimer)
