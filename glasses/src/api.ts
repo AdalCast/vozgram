@@ -11,17 +11,47 @@ export interface Provider { id: string; label: string; estado?: EstadoMensajero 
 /** `sender` solo viene en GRUPOS: en un chat de a dos, `out` ya lo dice todo. */
 export interface Msg { out: boolean; text: string; sender?: string }
 
+/**
+ * El backend no contesto a tiempo. NO es lo mismo que un fallo: en un envio,
+ * el mensaje pudo haber salido y solo se perdio la respuesta. Quien lo muestra
+ * tiene que decirlo asi, o el usuario reintenta y lo manda dos veces.
+ */
+export class SinRespuesta extends Error {}
+
+/** Tope de cualquier llamada al backend: conectar, esperar y leer la respuesta. */
+const TOPE_MS = 20_000
+
+/**
+ * ANTES NO HABIA NINGUN LIMITE. Con la red caida a medio camino -- el telefono
+ * se durmio, se cambio de wifi a datos -- `fetch` no volvia nunca: la lista se
+ * quedaba en "cargando..." y un envio en "Enviando a..." para siempre, con
+ * `busy` bloqueando cualquier otro intento. Quien llama ya atrapa el error;
+ * un cuelgue nunca llegaba a serlo. Con el tope, si.
+ *
+ * El reloj se apaga DESPUES de leer el cuerpo: la respuesta tambien puede
+ * quedarse a medias.
+ */
 async function call<T>(path: string, init?: RequestInit): Promise<T> {
-  const res = await fetch(`${BACKEND_URL}${path}`, {
-    ...init,
-    headers: {
-      'x-app-secret': APP_SECRET,
-      'Content-Type': 'application/json',
-      ...(init?.headers ?? {}),
-    },
-  })
-  if (!res.ok) throw new Error(`${path} -> HTTP ${res.status}`)
-  return res.json() as Promise<T>
+  const ctl = new AbortController()
+  const reloj = setTimeout(() => ctl.abort(), TOPE_MS)
+  try {
+    const res = await fetch(`${BACKEND_URL}${path}`, {
+      ...init,
+      signal: ctl.signal,
+      headers: {
+        'x-app-secret': APP_SECRET,
+        'Content-Type': 'application/json',
+        ...(init?.headers ?? {}),
+      },
+    })
+    if (!res.ok) throw new Error(`${path} -> HTTP ${res.status}`)
+    return await (res.json() as Promise<T>)
+  } catch (err) {
+    if (ctl.signal.aborted) throw new SinRespuesta(`el servidor no respondio en ${TOPE_MS / 1000} s`)
+    throw err
+  } finally {
+    clearTimeout(reloj)
+  }
 }
 
 export const getSonioxKey = () =>

@@ -3,14 +3,16 @@ import {
   TextContainerUpgrade,
   AudioInputSource,
   OsEventTypeList,
+  type EvenHubEvent,
 } from '@evenrealities/even_hub_sdk'
 import { SonioxStream } from './soniox'
 import {
   getProviders, getContacts, getMessages, sendMessage,
   getUnread, marcarLeido,
   type Provider, type Contact, type Msg, type Pendiente,
+  SinRespuesta,
 } from './api'
-import { TEXT_ID, TEXT_NAME, CLOCK_ID, CLOCK_NAME, startUpWithText, rebuildWithText, rebuildWithList, rebuildInicio } from './ui'
+import { TEXT_ID, TEXT_NAME, CLOCK_ID, CLOCK_NAME, PISTA_ID, PISTA_NAME, startUpWithText, rebuildWithText, rebuildWithList, rebuildInicio } from './ui'
 
 // ---------------------------------------------------------------------------
 // VozGram — push-to-talk, dos mensajeros.
@@ -90,6 +92,42 @@ const $state = document.getElementById('state')
 function mirror(text: string): void { if ($screen) $screen.textContent = text }
 function note(text: string): void { if ($state) $state.textContent = text }
 
+/**
+ * La leyenda de gestos y marcas, en la pantalla del telefono.
+ *
+ * En los lentes solo caben las marcas -- `•` `••` `—` --, que quien ya uso los
+ * lentes reconoce del tutorial de Even. El que no, necesita verlas explicadas
+ * una vez, y el telefono es donde hay lugar para hacerlo sin apretar nada.
+ *
+ * Y los circulos de las listas: `●` grupo, `○` persona. Sin explicarlos, un
+ * circulo relleno junto a un nombre se lee como "sin leer" -- es la convencion
+ * de casi cualquier app de mensajes --, justo lo que NO significa aqui.
+ *
+ * Va cerrada: es una red de seguridad, no algo que estorbe todos los dias.
+ */
+function pintarLeyendaDeGestos(): void {
+  const $gestos = document.getElementById('gestos') as HTMLDetailsElement | null
+  if (!$gestos) return
+  const fila = (marca: string, nombre: string, que: string) => `
+    <div class="fila">
+      <div class="marca">${marca}</div>
+      <div><div class="nombre">${nombre}</div><div class="que">${que}</div></div>
+    </div>`
+  $gestos.innerHTML = `
+    <summary>Gestos y marcas</summary>
+    ${fila('\u2022', 'Toque simple', 'Elegir. Al confirmar, envía.')}
+    ${fila('\u2022\u2022', 'Doble toque', 'Volver. En la bandeja, sale de la aplicación.')}
+    ${fila('\u2014', 'Pulsación larga', 'En un chat, responder: mantén el dedo mientras hablas y suelta al terminar. En la lista de chats, buscar un contacto diciendo su nombre.')}
+    ${fila('\u2500\u2500', 'Desliza', 'Moverte por la conversación.')}
+    <div class="pie">Son los mismos gestos de la aplicación de Even, con las mismas marcas.</div>
+    <div class="seccion">En las listas</div>
+    ${fila('\u25cf', 'Grupo', 'Un chat de varias personas.')}
+    ${fila('\u25cb', 'Persona', 'Un chat con una sola persona, o con un bot.')}
+    <div class="pie">El círculo NO indica mensajes sin leer. Los pendientes están en la bandeja, con su último mensaje.</div>`
+  $gestos.hidden = false
+}
+pintarLeyendaDeGestos()
+
 note('Conectando con los lentes...')
 const bridge = await waitForEvenAppBridge()
 note('Lentes conectados')
@@ -133,11 +171,35 @@ async function setText(content: string): Promise<void> {
   })), 'textContainerUpgrade')
 }
 
-async function gotoText(content: string): Promise<void> {
+async function gotoText(content: string, pista = ''): Promise<void> {
   lastRendered = fit(content)
   mirror(lastRendered)
   clockShown = hhmm()
-  await bleCall(() => bridge.rebuildPageContainer(rebuildWithText(lastRendered, clockShown)), 'rebuild:text')
+  pistaPuesta = pista
+  await bleCall(() => bridge.rebuildPageContainer(rebuildWithText(lastRendered, clockShown, pista)), 'rebuild:text')
+}
+
+/**
+ * Las instrucciones de gestos, con las marcas del tutorial de Even: `•` toque,
+ * `••` doble toque, `—` pulsacion larga. Van en la franja atenuada de abajo y
+ * no dentro del texto: no le roban renglones al mensaje, y se cambian con un
+ * upgrade sin reconstruir la pagina. Lo que significa cada marca se explica
+ * una vez, en la leyenda del telefono.
+ */
+const PISTA_LEER = '\u2014 responder    \u2022\u2022 volver'
+const PISTA_CONFIRMAR = '\u2022 enviar    \u2022\u2022 repetir'
+const PISTA_REINTENTAR = '\u2022 reintentar    \u2022\u2022 volver'
+const PISTA_VOLVER = '\u2022\u2022 volver'
+
+/** Cambia la pista sin reconstruir la pagina. Vive en su propio contenedor. */
+let pistaPuesta = ''
+async function setPista(texto: string): Promise<void> {
+  if (texto === pistaPuesta) return
+  pistaPuesta = texto
+  await bleCall(() => bridge.textContainerUpgrade(new TextContainerUpgrade({
+    containerID: PISTA_ID, containerName: PISTA_NAME,
+    contentOffset: 0, contentLength: 0, content: texto,
+  })), 'pista')
 }
 
 async function gotoList(names: string[], title: string): Promise<void> {
@@ -177,8 +239,8 @@ const firstName = () => who().split(' ')[0] ?? '?'
 const tituloLista = () => {
   const app = provider?.label ?? 'Chats'
   return query
-    ? `${app}: ${query.slice(0, 16)} · doble tap sale`
-    : `${app} · mantén tap busca`
+    ? `${app}: ${query.slice(0, 16)} · \u2022\u2022 limpiar`
+    : `${app} · \u2014 buscar contacto`
 }
 
 /**
@@ -228,8 +290,6 @@ function explicar(p: Provider): string {
       '',
       'Se cerro la sesion desde el telefono.',
       'Hay que vincular de nuevo en el servidor.',
-      '',
-      'Doble tap para volver',
     ].join('\n')
   }
   return [
@@ -237,8 +297,6 @@ function explicar(p: Provider): string {
     '',
     'El servidor no logro reconectar.',
     'Se reintenta solo; vuelve a probar en un rato.',
-    '',
-    'Doble tap para volver',
   ].join('\n')
 }
 
@@ -276,7 +334,7 @@ function paginate(msgs: Msg[]): string[] {
 
 const readView = () => {
   const nav = pages.length > 1 ? `  ${page + 1}/${pages.length}` : ''
-  return `${who()}${nav}\n\n${pages[page] ?? ''}\n\n*mantener tap para responder`
+  return `${who()}${nav}\n\n${pages[page] ?? ''}`
 }
 
 /** Diagnostico compartido: solo aparece cuando algo NO esta bien. */
@@ -296,7 +354,7 @@ function dictateView(t: string): string {
 function searchView(t: string): string {
   const cuerpo = tail(t.trim())
   const app = provider?.label ?? 'los chats'
-  return `Buscar en ${app}${diagnostico()}\n\n${cuerpo || 'Di un nombre... (suelta para buscar)'}`
+  return `Buscar contacto en ${app}${diagnostico()}\n\n${cuerpo || 'Di un nombre... (suelta para buscar)'}`
 }
 
 /**
@@ -557,7 +615,7 @@ async function toPick(recargar = true): Promise<void> {
     try {
       contacts = (await getContacts(provider?.id, query || undefined)).contacts
     } catch (err) {
-      await gotoText(`No se pudo cargar la lista.\n${String(err)}\n\n(doble tap = atras)`)
+      await gotoText(`No se pudo cargar la lista.\n${String(err)}`, PISTA_VOLVER)
       return
     }
     if (screen !== 'PICK') return
@@ -573,7 +631,7 @@ async function toRead(): Promise<void> {
   screen = 'READ'
   draft = ''
   pages = ['cargando...']; page = 0
-  await gotoText(readView())
+  await gotoText(readView(), PISTA_LEER)
 
   // El historial y el socket de voz se piden en paralelo: no tiene sentido
   // esperar uno para empezar el otro.
@@ -596,6 +654,7 @@ async function startListening(): Promise<void> {
   if (screen !== 'READ') return
   stopPolling()
   screen = 'DICTATE'
+  await setPista('')          // grabando, la pista estorba
   await setText(dictateView(''))
   await encenderMic()
   await setText(dictateView(''))
@@ -610,7 +669,7 @@ async function stopListening(): Promise<void> {
   draft = masCompleto(confirmado, ultimoPintado, draft)
   screen = 'CONFIRM'
   const cuerpo = draft.trim() || '(no se escuchó nada)'
-  await gotoText(`Enviar a ${who()}:\n\n${cuerpo}\n\ntap = ENVIAR · doble = repetir`)
+  await gotoText(`Enviar a ${who()}:\n\n${cuerpo}`, PISTA_CONFIRMAR)
 }
 
 /** MANTENER en PICK: dictar un nombre para filtrar la lista. */
@@ -637,6 +696,9 @@ async function endSearch(): Promise<void> {
 async function doSend(): Promise<void> {
   if (busy || !target || !draft.trim()) return
   busy = true
+  // La pista se BORRA mientras se envia: decia "• enviar", y un toque ahora
+  // no hace nada. Una instruccion que no funciona es peor que ninguna.
+  await setPista('')
   await setText(`Enviando a ${who()}...`)
   try {
     await sendMessage(target.id, draft.trim())
@@ -646,7 +708,13 @@ async function doSend(): Promise<void> {
     // Volver AL CHAT, no al menu: acabas de escribir, quieres ver la respuesta.
     setTimeout(() => { toRead() }, 1200)
   } catch (err) {
-    await setText(`FALLÓ el envío.\n${String(err)}\n\n(doble tap = volver)`)
+    // Sin respuesta NO se dice "fallo": pudo haber salido, y reintentar a
+    // ciegas lo mandaria dos veces. Volver al chat recarga el historial y ahi
+    // se ve si esta.
+    await setText(err instanceof SinRespuesta
+      ? 'No se confirmó el envío.\n\nPuede que sí haya llegado: revisa el chat antes de reintentar.'
+      : `FALLÓ el envío.\n${String(err)}`)
+    await setPista(PISTA_REINTENTAR)
   } finally {
     busy = false
   }
@@ -654,12 +722,39 @@ async function doSend(): Promise<void> {
 
 // --- Arranque ---------------------------------------------------------------
 clockShown = hhmm()
-const ok = await bridge.createStartUpPageContainer(startUpWithText('VozGram\n\nCargando...', clockShown))
+let ok = await bridge.createStartUpPageContainer(startUpWithText('VozGram\n\nCargando...', clockShown))
+// 1 NO siempre es "contenedor invalido": tambien significa que la pagina YA
+// EXISTE, cuando la WebView se recarga sobre la app ya arrancada. Rendirse
+// ahi dejaria la app muerta por algo que se arregla reconstruyendo.
+if (ok === 1 && await bridge.rebuildPageContainer(rebuildWithText('VozGram\n\nCargando...', clockShown))) ok = 0
 if (ok !== 0) throw new Error(`createStartUpPageContainer fallo: ${ok}`)
 lastRendered = 'VozGram\n\nCargando...'
 mirror(lastRendered)
 
-draft = (await bridge.getLocalStorage(STORAGE_KEY)) || ''
+// --- Eventos: se escuchan DESDE AQUI ----------------------------------------
+// En cuanto hay algo en los lentes, el doble toque tiene que poder salir. Antes
+// el manejador se registraba al FINAL del arranque, despues de leer el
+// borrador y de hablar con el backend: si cualquiera de las dos se colgaba, la
+// pantalla decia "Cargando..." y el doble toque no hacia nada. Es causal de
+// rechazo en la revision del portal.
+//
+// Hasta que el arranque termina solo se atiende el doble toque, y solo para
+// salir: el resto de la app todavia no existe. `?? -1` y no `?? 0`: un sysEvent
+// sin eventType es un TOQUE, y aqui el toque no hace nada.
+let arrancado = false
+const unsubscribe = bridge.onEvenHubEvent(event => {
+  if (arrancado) { manejarEvento(event); return }
+  if ((event.sysEvent?.eventType ?? -1) === OsEventTypeList.DOUBLE_CLICK_EVENT) {
+    void bridge.shutDownPageContainer(1).catch(() => {})
+  }
+})
+
+// Con tope: `getLocalStorage` puede no volver nunca en los lentes, y sin
+// borrador guardado la app funciona igual.
+draft = (await Promise.race([
+  bridge.getLocalStorage(STORAGE_KEY),
+  new Promise<string>(r => setTimeout(() => r(''), BLE_TIMEOUT_MS)),
+])) || ''
 
 // El reloj corre siempre, en todas las pantallas.
 const clockTimer = setInterval(tickClock, CLOCK_MS)
@@ -684,10 +779,14 @@ try {
 } catch (err) {
   await gotoText(`No se pudo hablar con el backend.\n${String(err)}`)
 }
+arrancado = true
 
 // --- Eventos ----------------------------------------------------------------
+// Una DECLARACION de funcion y no una constante: se iza, asi que el manejador
+// registrado arriba, junto a la primera pantalla, ya la conoce. Solo se llama
+// con `arrancado`, cuando todo lo que toca ya esta declarado.
 // PROTOBUF: los ceros llegan como undefined. El `?? 0` NO es opcional.
-const unsubscribe = bridge.onEvenHubEvent(event => {
+function manejarEvento(event: EvenHubEvent): void {
   if (event.audioEvent?.audioPcm) {
     chunks++
     bytes += event.audioEvent.audioPcm.length
@@ -718,7 +817,7 @@ const unsubscribe = bridge.onEvenHubEvent(event => {
       if (!entrable(elegido)) {
         provider = elegido
         screen = 'INFO'
-        void gotoText(explicar(elegido))
+        void gotoText(explicar(elegido), PISTA_VOLVER)
         return
       }
       provider = elegido
@@ -785,7 +884,7 @@ const unsubscribe = bridge.onEvenHubEvent(event => {
   if (type === OsEventTypeList.ABNORMAL_EXIT_EVENT || type === OsEventTypeList.SYSTEM_EXIT_EVENT) {
     cleanup()
   }
-})
+}
 
 function cleanup(): void {
   clearInterval(clockTimer)
