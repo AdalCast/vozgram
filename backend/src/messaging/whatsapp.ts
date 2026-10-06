@@ -8,6 +8,7 @@ import {
   chatsSinNombre, nombreGuardado, guardarLidMap, chatsLid,
   noLeidos, clavesNoLeidas, limpiarNoLeidos, sumarNoLeido,
 } from './store'
+import { textoWhatsApp } from './marcas'
 
 /**
  * Baileys exige un logger con esta forma. No importamos su tipo ILogger porque
@@ -51,19 +52,13 @@ function num(v: unknown): number {
   return 0
 }
 
-/** El texto de un mensaje vive en distintos lugares segun el tipo. */
-function texto(m: WAMessage): string {
-  const c = m.message
-  if (!c) return ''
-  return (
-    c.conversation ??
-    c.extendedTextMessage?.text ??
-    c.imageMessage?.caption ??
-    c.videoMessage?.caption ??
-    c.documentMessage?.caption ??
-    ''
-  )
-}
+/**
+ * Lo que se guarda de un mensaje: su texto, o la marca de lo que trae
+ * (`[imagen]`, `[nota de voz] 0:14`...). Ver marcas.ts. Antes solo se
+ * rescataba el pie de foto: una foto, un sticker o una nota de voz sin texto se
+ * descartaban ANTES de guardarse, y WhatsApp no los reenvia.
+ */
+const texto = (m: WAMessage): string => textoWhatsApp(m.message)
 
 /**
  * Personas y grupos. Fuera estados, canales y difusiones.
