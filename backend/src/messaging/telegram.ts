@@ -2,6 +2,7 @@ import { TelegramClient } from 'telegram'
 import { StringSession } from 'telegram/sessions'
 import type { Contact, Msg, MessagingProvider, Pendiente } from './port'
 import { normalizar, soloLegible } from './texto'
+import { textoTelegram } from './marcas'
 
 /** Nombre para mostrar de una entidad de Telegram (persona, grupo o canal). */
 function nombreDe(e: unknown): string {
@@ -72,10 +73,14 @@ export const telegram: MessagingProvider = {
       const cn = (m.peerId as { className?: string } | undefined)?.className
       return cn === 'PeerChat' || cn === 'PeerChannel'
     })
+    // Se guarda lo que tenga ALGO que mostrar: texto, una marca de media, o
+    // las dos. Antes se pedia texto, y una foto o una nota de voz sin pie
+    // desaparecian de la conversacion. Ver marcas.ts.
     return msgs
-      .filter(m => typeof m.message === 'string' && m.message.length > 0)
-      .map(m => {
-        const base = { out: Boolean(m.out), text: String(m.message) }
+      .map(m => ({ m, visible: textoTelegram(m) }))
+      .filter(({ visible }) => visible.length > 0)
+      .map(({ m, visible }) => {
+        const base = { out: Boolean(m.out), text: visible }
         if (!esGrupo || m.out) return base
         const quien = nombreDe(m.sender)
         return quien ? { ...base, sender: quien } : base
@@ -101,11 +106,14 @@ export const telegram: MessagingProvider = {
     for (const d of conPendientes) {
       const msgs = await c.getMessages(d.id!, { limit: 1 }).catch(() => [])
       const m = msgs[0]
-      if (!m?.message) continue
+      // Antes se pedia `m.message` a secas: si lo ultimo era una foto o un
+      // sticker, el chat NO salia en la bandeja aunque tuviera pendientes.
+      const visible = m ? textoTelegram(m) : ''
+      if (!visible) continue
       salida.push({
         peer: String(d.id),
         quien: soloLegible(d.title ?? '') || 'sin nombre',
-        text: soloLegible(m.message),
+        text: soloLegible(visible),
         ts: m.date,
         kind: d.isGroup ? 'grupo' : 'persona',
       })
